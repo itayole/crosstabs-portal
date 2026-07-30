@@ -1,33 +1,42 @@
+/* Shiluv portal palette: navy #0d1b2a / slate-blue cards / gold #c9a84c accent,
+   matching homepage/index.html in the portal repo so this page reads as part of
+   the same product rather than a separate tool.
+
+   --accent doubles as a button background and as a text colour, so each mode
+   pairs it with an --accent-text that actually contrasts: gold is only legible
+   against navy, never white (gold on white is ~2:1). Light mode therefore drops
+   to a deeper bronze gold so it works both as text on white and behind white
+   text -- both ~4.9:1, i.e. WCAG AA. */
 :root {
-  --bg: #f4f4fa;
+  --bg: #f1f4f8;
   --card-bg: #ffffff;
-  --text: #1f2233;
-  --subtitle: #75798c;
-  --border: #e7e7f0;
-  --zone-bg: #f8f8fc;
-  --accent: #7c3aed;
-  --accent-hover: #6b2fd1;
-  --accent-soft: #efe6fd;
+  --text: #0d1b2a;
+  --subtitle: #5b6b7f;
+  --border: #d9e0e9;
+  --zone-bg: #f7f9fc;
+  --accent: #8a6d1f;
+  --accent-hover: #6f5718;
+  --accent-text: #ffffff;
   --ok: #19875b;
   --error: #d0392b;
-  --log-bg: #14151c;
+  --log-bg: #0d1b2a;
   --log-text: #d7dce2;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #16171d;
-    --card-bg: #1e2028;
-    --text: #eceef3;
-    --subtitle: #9599a8;
-    --border: #2c2e39;
-    --zone-bg: #262835;
-    --accent: #9163f2;
-    --accent-hover: #a97cff;
-    --accent-soft: #2c2440;
+    --bg: #0d1b2a;
+    --card-bg: #162032;
+    --text: #f0f0f0;
+    --subtitle: #8a9bb0;
+    --border: #2a3f58;
+    --zone-bg: #1b2740;
+    --accent: #c9a84c;
+    --accent-hover: #dcbb5e;
+    --accent-text: #0d1b2a;
     --ok: #43c98a;
     --error: #ef6a5f;
-    --log-bg: #0c0d12;
+    --log-bg: #071220;
     --log-text: #c9d0da;
   }
 }
@@ -67,7 +76,7 @@ body {
   height: 28px;
   border-radius: 8px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -193,7 +202,7 @@ button[type="submit"] {
   border: none;
   border-radius: 999px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   font-size: 0.92rem;
   font-weight: 600;
   cursor: pointer;
@@ -270,7 +279,7 @@ button[type="submit"]:disabled { opacity: 0.55; cursor: default; }
   padding: 11px 28px;
   border-radius: 999px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   text-decoration: none;
   font-weight: 600;
   font-size: 0.92rem;
