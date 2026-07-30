@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>הורדת קרוסטאבים</title>
+<!-- Relative (not url_for/root-absolute) so the page works both at / and behind the portal
+     gateway at /crosstabs/, where nginx strips the prefix before forwarding. -->
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div class="badge">CT</div>
+      <div class="titles">
+        <h1>הורדת קרוסטאבים מ-Decipher</h1>
+        <p class="subtitle">הדביקו כתובת URL של דף הקרוסטאבים של הסקר. הכלי מוריד כל קרוסטאב מותאם אישית,
+          משאיר רק את טבלת האחוזים בכל אחד, ומאחד הכל לקובץ אקסל אחד.</p>
+      </div>
+    </header>
+
+    <ol class="steps">
+      <li class="step" data-step="1"><span class="dot">1</span><span class="label">כתובת סקר</span></li>
+      <li class="connector"></li>
+      <li class="step" data-step="2"><span class="dot">2</span><span class="label">עיבוד</span></li>
+      <li class="connector"></li>
+      <li class="step" data-step="3"><span class="dot">3</span><span class="label">תוצאה</span></li>
+    </ol>
+
+    <section class="card">
+      <form id="run-form">
+        <label for="survey_url">כתובת URL של הסקר <span class="required">חובה</span></label>
+        <div class="input-zone">
+          <input
+            type="text"
+            id="survey_url"
+            name="survey_url"
+            placeholder="https://emea.focusvision.com/apps/report/selfserve/2403/260755#!/"
+            required
+            dir="ltr"
+          >
+        </div>
+        <button type="submit" id="run-button">הרץ</button>
+      </form>
+
+      <div id="result" class="result hidden">
+        <div class="status-row">
+          <span id="spinner" class="spinner"></span>
+          <span id="status-line" class="status-line"></span>
+        </div>
+
+        <button type="button" id="toggle-log" class="link-button hidden">הצג פרטים</button>
+        <pre id="log" class="log hidden"></pre>
+
+        <a id="download-link" class="download-link hidden" href="#" download>הורדת קובץ האקסל המאוחד</a>
+      </div>
+    </section>
+
+    <footer class="footer">כלי קרוסטאבים</footer>
+  </main>
+
+  <script>
+    const form = document.getElementById('run-form');
+    const runButton = document.getElementById('run-button');
+    const result = document.getElementById('result');
+    const spinner = document.getElementById('spinner');
+    const statusLine = document.getElementById('status-line');
+    const toggleLogButton = document.getElementById('toggle-log');
+    const logEl = document.getElementById('log');
+    const downloadLink = document.getElementById('download-link');
+    const steps = document.querySelectorAll('.step');
+
+    let pollTimer = null;
+    let shownLines = 0;
+    let logVisible = false;
+
+    function setStep(n) {
+      steps.forEach(s => {
+        const stepNum = Number(s.dataset.step);
+        s.classList.toggle('active', stepNum === n);
+        s.classList.toggle('done', stepNum < n);
+      });
+    }
+
+    function resetView() {
+      result.classList.remove('hidden');
+      spinner.classList.remove('hidden');
+      statusLine.textContent = 'מריץ...';
+      statusLine.className = 'status-line running';
+      logEl.textContent = '';
+      logEl.classList.add('hidden');
+      toggleLogButton.classList.remove('hidden');
+      toggleLogButton.textContent = 'הצג פרטים';
+      logVisible = false;
+      downloadLink.classList.add('hidden');
+      shownLines = 0;
+      setStep(2);
+    }
+
+    toggleLogButton.addEventListener('click', () => {
+      logVisible = !logVisible;
+      logEl.classList.toggle('hidden', !logVisible);
+      toggleLogButton.textContent = logVisible ? 'הסתר פרטים' : 'הצג פרטים';
+    });
+
+    async function poll(jobId) {
+      try {
+        const res = await fetch(`api/status/${jobId}`);
+        if (!res.ok) throw new Error(`שגיאה בבדיקת סטטוס (${res.status})`);
+        const data = await res.json();
+
+        if (data.log.length > shownLines) {
+          logEl.textContent += data.log.slice(shownLines).join('\n') + '\n';
+          shownLines = data.log.length;
+          logEl.scrollTop = logEl.scrollHeight;
+          const lastLine = data.log[data.log.length - 1];
+          if (data.status === 'running') statusLine.textContent = lastLine;
+        }
+
+        if (data.status === 'running') {
+          pollTimer = setTimeout(() => poll(jobId), 1200);
+          return;
+        }
+
+        runButton.disabled = false;
+        spinner.classList.add('hidden');
+
+        if (data.status === 'done') {
+          statusLine.textContent = 'הושלם בהצלחה';
+          statusLine.className = 'status-line done';
+          downloadLink.href = data.download_url;
+          downloadLink.classList.remove('hidden');
+          setStep(3);
+        } else {
+          statusLine.textContent = `נכשל: ${data.error || 'שגיאה לא ידועה'}`;
+          statusLine.className = 'status-line error';
+          setStep(1);
+        }
+      } catch (err) {
+        runButton.disabled = false;
+        spinner.classList.add('hidden');
+        statusLine.textContent = `שגיאה בבדיקת סטטוס: ${err.message}`;
+        statusLine.className = 'status-line error';
+      }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (pollTimer) clearTimeout(pollTimer);
+
+      const surveyUrl = document.getElementById('survey_url').value.trim();
+      runButton.disabled = true;
+      resetView();
+
+      try {
+        const res = await fetch('api/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ survey_url: surveyUrl }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          runButton.disabled = false;
+          spinner.classList.add('hidden');
+          statusLine.textContent = `שגיאה: ${data.error || 'לא ניתן להתחיל את הריצה'}`;
+          statusLine.className = 'status-line error';
+          setStep(1);
+          return;
+        }
+
+        poll(data.job_id);
+      } catch (err) {
+        runButton.disabled = false;
+        spinner.classList.add('hidden');
+        statusLine.textContent = `שגיאה: ${err.message}`;
+        statusLine.className = 'status-line error';
+      }
+    });
+  </script>
+</body>
+</html>

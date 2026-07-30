@@ -1,0 +1,12 @@
+# Local/standalone testing only. In production this app runs as the `crosstabs` service in
+# the portal stack (../portal/portal.yml) behind the gateway at /crosstabs/ — see README.md.
+services:
+  crosstabs:
+    build: .
+    image: ghcr.io/itayole/crosstabs-portal:latest   # same tag the portal stack pulls
+    container_name: crosstabs
+    restart: unless-stopped
+    ports:
+      - "5000:5000"     # direct access; the portal gateway reaches it over the docker network
+    volumes:
+      - ./data:/data    # holds auth_state.json (session) and downloads/ (persisted output)
