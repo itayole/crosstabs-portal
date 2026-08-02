@@ -294,3 +294,85 @@ button[type="submit"]:disabled { opacity: 0.55; cursor: default; }
   font-size: 0.75rem;
   direction: ltr;
 }
+
+/* session panel -- Decipher login state (see templates/index.html) */
+.session-card {
+  margin-bottom: 16px;
+  padding: 18px 20px;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.session-dot.ok { background: var(--ok); }
+.session-dot.missing { background: var(--error); }
+
+.session-text {
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.session-row .link-button { margin: 0 auto 0 0; }
+
+.session-upload { margin-top: 14px; }
+.session-upload.hidden { display: none; }
+
+.session-help {
+  margin: 0 0 12px;
+  color: var(--subtitle);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.session-help code {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.78rem;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--zone-bg);
+  border: 1px solid var(--border);
+}
+
+.session-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.session-actions input[type="file"] {
+  flex: 1;
+  min-width: 200px;
+  font-size: 0.8rem;
+  color: var(--subtitle);
+}
+
+.session-actions button {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.session-actions button:disabled { opacity: 0.55; cursor: default; }
+
+.session-error {
+  display: block;
+  margin-top: 10px;
+  color: var(--error);
+  font-size: 0.8rem;
+}
+.session-error.hidden { display: none; }

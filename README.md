@@ -16,13 +16,28 @@ this container reuses the same `auth_state.json` session file the desktop script
 **Setup / refresh flow:**
 1. On any machine with a browser (e.g. your desktop), run the desktop script's login step:
    `python download_crosstabs.py "<any survey url>" --headed` and log in when the window opens.
-2. Copy the resulting `auth_state.json` into this container's mounted `./data` folder (see
-   docker-compose.yml below) — i.e. `./data/auth_state.json`.
-3. The portal page will then work until that Decipher session expires, at which point it'll show
-   a clear "session expired" error and you repeat steps 1–2.
+2. Upload the resulting `auth_state.json` on the app's own page — the panel at the top shows
+   whether a session is loaded and takes the file directly. No NAS or File Station access needed.
+3. The page then works until that Decipher session expires. When it does, the run fails, the
+   stale file is discarded automatically, and the upload panel reappears — repeat steps 1–2.
 
-There's no way around this manual refresh step given 2FA — but it should be infrequent (however
-often Decipher expires your session).
+There's no way around this manual step given 2FA.
+
+**The session does not survive a restart.** It's held in the container's temp dir, so any restart
+— including redeploying an unrelated portal app, since Container Station restarts the whole
+stack — means uploading it again. That's the trade-off for running with no volumes, the same way
+`dna-charts` and `spss-claude` do. If the re-uploading becomes annoying, the alternative is a
+one-file read-only bind mount at `AUTH_STATE_PATH`; nothing in the code needs to change for that.
+
+Note the session file is accepted over the portal, which has no authentication in front of it.
+That's the same exposure as every other app on the portal, but it's a live cookie, so it's worth
+knowing.
+
+## Storage
+
+Nothing persists. Each job gets its own temp directory (so two people running the same survey
+can't overwrite each other — `combine_crosstabs` rewrites the downloaded `.xlsx` files in place),
+and that directory is deleted an hour after the job finishes, along with its download link.
 
 ## Running it
 
@@ -30,14 +45,14 @@ often Decipher expires your session).
 docker compose up -d --build
 ```
 
-This builds the image, starts the container, maps port 5000, and mounts `./data` for
-`auth_state.json` + downloaded files (so they survive container restarts).
+This builds the image and starts the container on port 5000. There are no volumes — upload
+`auth_state.json` on the page once it's up.
 
 Without compose:
 
 ```
 docker build -t crosstabs-portal .
-docker run -d -p 5000:5000 -v $(pwd)/data:/data --name crosstabs crosstabs-portal
+docker run -d -p 5000:5000 --name crosstabs ghcr.io/itayole/crosstabs-portal:latest
 ```
 
 ## Wiring it into the portal at /crosstabs/
@@ -57,10 +72,8 @@ that *keeps* the prefix, but it isn't used in the portal setup.
 
 ### auth_state.json on QNAP
 
-The portal service bind-mounts `/share/Container/portal/crosstabs-data` to `/data` (a named volume
-would be awkward — this file has to be replaced by hand via File Station every time the Decipher
-session expires). Put the refreshed `auth_state.json` directly in that folder; `downloads/` is
-created next to it and persists across restarts.
+Nothing to set up — the portal service declares no volumes. After the stack starts, open
+`/crosstabs/` and upload `auth_state.json` on the page.
 
 ## Files
 

@@ -9,7 +9,10 @@ but headless-only: login can't be automated here (Decipher requires 2FA), so
 it relies on a pre-existing auth_state.json session file (see README.md).
 """
 
+import json
 import os
+import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -43,10 +46,17 @@ url_prefix = os.environ.get("URL_PREFIX", "").rstrip("/")
 if url_prefix:
     app.wsgi_app = PrefixMiddleware(app.wsgi_app, prefix=url_prefix)
 
-DOWNLOADS_ROOT = Path(os.environ.get("DOWNLOADS_DIR", Path(__file__).resolve().parent / "downloads"))
-DOWNLOADS_ROOT.mkdir(parents=True, exist_ok=True)
+# Job output is scratch, not data: the user downloads the workbook and that's the end of it.
+# So it lives in a temp dir inside the container with no volume behind it, the same way the
+# other portal apps (dna-charts, spss-claude, pdf-editor) hand back a file and keep nothing.
+# Each job gets its own subfolder -- two people running the same survey at once would
+# otherwise share one folder, and combine_crosstabs rewrites those .xlsx files in place.
+JOBS_ROOT = Path(os.environ.get("DOWNLOADS_DIR", Path(tempfile.gettempdir()) / "crosstabs-jobs"))
+JOBS_ROOT.mkdir(parents=True, exist_ok=True)
 
-JOB_TTL_SECONDS = 3600  # stop reporting a finished job's status after this long
+JOB_TTL_SECONDS = 3600  # after this, a job's status stops resolving and its files are deleted
+
+SESSION_MAX_BYTES = 2 * 1024 * 1024  # auth_state.json is a few KB; anything near this is wrong
 
 _jobs = {}
 _jobs_lock = threading.Lock()
@@ -54,11 +64,14 @@ _jobs_lock = threading.Lock()
 
 def _new_job():
     job_id = uuid.uuid4().hex
+    job_dir = JOBS_ROOT / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
     with _jobs_lock:
         _jobs[job_id] = {
             "status": "running",       # running | done | error
             "log": [],
             "created_at": time.time(),
+            "job_dir": job_dir,
             "result_file": None,       # absolute path, once done
             "error": None,
         }
@@ -79,11 +92,18 @@ def _finish(job_id, result_file=None, error=None):
 
 
 def _run_job(job_id, survey_url):
+    with _jobs_lock:
+        job_dir = _jobs[job_id]["job_dir"]
     try:
-        output_dir = dl.run_download(survey_url, progress=lambda m: _log(job_id, m))
+        # root= keeps the survey-named folder (and so the combined workbook's filename)
+        # while confining it to this job's own directory.
+        output_dir = dl.run_download(survey_url, root=job_dir, progress=lambda m: _log(job_id, m))
         combined_path = combine.run_combine(output_dir, progress=lambda m: _log(job_id, m))
         _finish(job_id, result_file=combined_path)
     except dl.LoginRequired as exc:
+        # The stored session is expired (or absent), so it's dead weight -- drop it and the
+        # page will show the upload prompt again instead of letting the next run fail too.
+        dl.AUTH_FILE.unlink(missing_ok=True)
         _log(job_id, str(exc))
         _finish(job_id, error=str(exc))
     except Exception as exc:
@@ -95,13 +115,64 @@ def _prune_old_jobs():
     cutoff = time.time() - JOB_TTL_SECONDS
     with _jobs_lock:
         stale = [jid for jid, j in _jobs.items() if j["created_at"] < cutoff]
+        dirs = [_jobs[jid]["job_dir"] for jid in stale]
         for jid in stale:
             del _jobs[jid]
+    # Outside the lock: rmtree can be slow and nothing else references these paths now.
+    for job_dir in dirs:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def _session_present():
+    return dl.AUTH_FILE.exists()
 
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/session", methods=["GET"])
+def api_session_status():
+    return jsonify({"present": _session_present()})
+
+
+@app.route("/api/session", methods=["POST"])
+def api_session_upload():
+    """Accept an auth_state.json produced by the desktop login step.
+
+    The session file can't be baked into the image (it's a live cookie, and it expires) and
+    there's no volume to drop it into, so it's uploaded here and kept in the container's temp
+    dir -- meaning it has to be re-uploaded after a restart. Decipher's 2FA is why the
+    container can't just log in itself. See README.md.
+    """
+    uploaded = request.files.get("session_file")
+    if uploaded is None or not uploaded.filename:
+        return jsonify({"error": "לא נבחר קובץ."}), 400
+
+    raw = uploaded.read(SESSION_MAX_BYTES + 1)
+    if len(raw) > SESSION_MAX_BYTES:
+        return jsonify({"error": "הקובץ גדול מדי — auth_state.json אמור להיות כמה קילובייטים."}), 400
+
+    try:
+        parsed = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return jsonify({"error": "הקובץ אינו JSON תקין — ודאו שזה auth_state.json."}), 400
+
+    # Playwright's storage_state always has these two keys. Checking them catches the
+    # common mistake of uploading some other .json before it fails mid-run instead.
+    if not isinstance(parsed, dict) or "cookies" not in parsed or "origins" not in parsed:
+        return jsonify({
+            "error": "הקובץ אינו נראה כמו auth_state.json (חסרים cookies/origins)."
+        }), 400
+
+    dl.AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # Write-then-replace so a failed upload can't leave a half-written session behind.
+    temp_path = dl.AUTH_FILE.with_suffix(".tmp")
+    temp_path.write_bytes(raw)
+    os.replace(temp_path, dl.AUTH_FILE)
+
+    return jsonify({"present": True})
 
 
 @app.route("/api/run", methods=["POST"])

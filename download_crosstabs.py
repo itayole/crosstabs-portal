@@ -49,11 +49,11 @@ class LoginRequired(Exception):
 def ensure_logged_in(page, list_url: str):
     page.goto(list_url, wait_until="networkidle", timeout=NAV_TIMEOUT)
     if is_login_page(page):
+        # Surfaced verbatim in the page, which is Hebrew.
         raise LoginRequired(
-            "The saved Decipher session has expired or doesn't exist. Someone needs to refresh "
-            "auth_state.json by running the desktop login step (see README.md) and updating the "
-            "file this container mounts -- automated login isn't possible here because Decipher "
-            "requires 2FA."
+            "פג תוקף החיבור ל-Decipher. הריצו מחדש את שלב ההתחברות בסקריפט הדסקטופ "
+            "והעלו כאן את קובץ auth_state.json המעודכן. התחברות אוטומטית אינה אפשרית "
+            "מכיוון ש-Decipher דורש אימות דו-שלבי."
         )
     page.wait_for_selector("text=New Crosstab", timeout=NAV_TIMEOUT)
 
@@ -116,18 +116,23 @@ def download_one_crosstab(page, list_url: str, index: int, expected_name: str, o
     return dest
 
 
-def run_download(survey_url: str, output: Path = None, progress=None) -> Path:
+def run_download(survey_url: str, output: Path = None, root: Path = None, progress=None) -> Path:
     """Download every custom crosstab for a survey as .xlsx. Returns the output directory.
     Raises LoginRequired if the saved session is missing/expired.
-    progress(msg) is called with human-readable status lines, if provided."""
+    progress(msg) is called with human-readable status lines, if provided.
+
+    output pins the folder outright; root instead keeps the survey-named subfolder (which
+    also names the combined workbook) but places it under a caller-chosen parent -- the web
+    app uses this to give each job its own directory so concurrent runs can't overwrite
+    each other's files."""
     def log(msg):
         if progress:
             progress(msg)
 
     if not AUTH_FILE.exists():
         raise LoginRequired(
-            "No saved Decipher session found (auth_state.json is missing). Someone needs to create it "
-            "by running the desktop login step once (see README.md)."
+            "לא נטען קובץ התחברות. הריצו את שלב ההתחברות בסקריפט הדסקטופ "
+            "והעלו כאן את קובץ auth_state.json."
         )
 
     origin, survey_path = parse_survey_url(survey_url)
@@ -145,7 +150,7 @@ def run_download(survey_url: str, output: Path = None, progress=None) -> Path:
             raise
 
         survey_name = page.title().strip() or survey_path.replace("/", "_")
-        output_dir = Path(output) if output else DOWNLOADS_ROOT / sanitize_filename(survey_name)
+        output_dir = Path(output) if output else Path(root or DOWNLOADS_ROOT) / sanitize_filename(survey_name)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         all_cards = list_crosstab_cards(page)

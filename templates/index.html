@@ -27,6 +27,29 @@
       <li class="step" data-step="3"><span class="dot">3</span><span class="label">תוצאה</span></li>
     </ol>
 
+    <!-- Session panel. Decipher requires 2FA so the container can never log in itself; it
+         relies on an auth_state.json from the desktop login step, uploaded here. It lives in
+         the container's temp dir, so it has to be re-uploaded after a restart. -->
+    <section class="card session-card" id="session-card">
+      <div class="session-row">
+        <span id="session-dot" class="session-dot"></span>
+        <span id="session-text" class="session-text">בודק חיבור...</span>
+        <button type="button" id="session-toggle" class="link-button hidden">החלפת קובץ</button>
+      </div>
+
+      <div id="session-upload" class="session-upload hidden">
+        <p class="session-help">
+          הריצו את שלב ההתחברות בסקריפט הדסקטופ, והעלו כאן את הקובץ <code dir="ltr">auth_state.json</code> שנוצר.
+          הקובץ נשמר באופן זמני בלבד ויש להעלותו מחדש לאחר הפעלה מחדש של השירות.
+        </p>
+        <div class="session-actions">
+          <input type="file" id="session-file" accept=".json,application/json">
+          <button type="button" id="session-submit">העלאה</button>
+        </div>
+        <span id="session-error" class="session-error hidden"></span>
+      </div>
+    </section>
+
     <section class="card">
       <form id="run-form">
         <label for="survey_url">כתובת URL של הסקר <span class="required">חובה</span></label>
@@ -70,9 +93,74 @@
     const downloadLink = document.getElementById('download-link');
     const steps = document.querySelectorAll('.step');
 
+    const sessionDot = document.getElementById('session-dot');
+    const sessionText = document.getElementById('session-text');
+    const sessionToggle = document.getElementById('session-toggle');
+    const sessionUpload = document.getElementById('session-upload');
+    const sessionFile = document.getElementById('session-file');
+    const sessionSubmit = document.getElementById('session-submit');
+    const sessionError = document.getElementById('session-error');
+
     let pollTimer = null;
     let shownLines = 0;
     let logVisible = false;
+    let sessionPresent = false;
+
+    function renderSession(present) {
+      sessionPresent = present;
+      sessionDot.className = 'session-dot ' + (present ? 'ok' : 'missing');
+      sessionText.textContent = present ? 'החיבור ל-Decipher פעיל' : 'נדרשת העלאת קובץ התחברות';
+      // With no session there's nothing to toggle -- the upload box is already open.
+      sessionToggle.classList.toggle('hidden', !present);
+      sessionUpload.classList.toggle('hidden', present);
+      runButton.disabled = !present;
+    }
+
+    async function loadSession() {
+      try {
+        const res = await fetch('api/session');
+        const data = await res.json();
+        renderSession(Boolean(data.present));
+      } catch (err) {
+        renderSession(false);
+      }
+    }
+
+    sessionToggle.addEventListener('click', () => {
+      sessionUpload.classList.toggle('hidden');
+    });
+
+    sessionSubmit.addEventListener('click', async () => {
+      const file = sessionFile.files[0];
+      sessionError.classList.add('hidden');
+
+      if (!file) {
+        sessionError.textContent = 'בחרו קובץ auth_state.json.';
+        sessionError.classList.remove('hidden');
+        return;
+      }
+
+      const body = new FormData();
+      body.append('session_file', file);
+      sessionSubmit.disabled = true;
+
+      try {
+        const res = await fetch('api/session', { method: 'POST', body });
+        const data = await res.json();
+        if (!res.ok) {
+          sessionError.textContent = data.error || 'ההעלאה נכשלה.';
+          sessionError.classList.remove('hidden');
+          return;
+        }
+        sessionFile.value = '';
+        renderSession(true);
+      } catch (err) {
+        sessionError.textContent = `ההעלאה נכשלה: ${err.message}`;
+        sessionError.classList.remove('hidden');
+      } finally {
+        sessionSubmit.disabled = false;
+      }
+    });
 
     function setStep(n) {
       steps.forEach(s => {
@@ -135,6 +223,9 @@
           statusLine.textContent = `נכשל: ${data.error || 'שגיאה לא ידועה'}`;
           statusLine.className = 'status-line error';
           setStep(1);
+          // An expired session is discarded server-side, so re-read the state: this
+          // reopens the upload box rather than letting the next run fail the same way.
+          loadSession();
         }
       } catch (err) {
         runButton.disabled = false;
@@ -177,6 +268,8 @@
         statusLine.className = 'status-line error';
       }
     });
+
+    loadSession();
   </script>
 </body>
 </html>

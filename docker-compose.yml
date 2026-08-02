@@ -8,5 +8,5 @@ services:
     restart: unless-stopped
     ports:
       - "5000:5000"     # direct access; the portal gateway reaches it over the docker network
-    volumes:
-      - ./data:/data    # holds auth_state.json (session) and downloads/ (persisted output)
+    # No volumes: auth_state.json is uploaded through the web UI and job output is scratch,
+    # so both live in the container's temp dir and are re-created as needed.
