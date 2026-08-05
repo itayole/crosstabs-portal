@@ -39,14 +39,13 @@
 
       <div id="session-upload" class="session-upload hidden">
         <p class="session-help">
-          התחברו ל-Decipher בחלון שייפתח כאן. החלון מריץ דפדפן בתוך השירות, כך שההתחברות
-          (כולל אימות דו-שלבי) נשמרת במקום הנכון. יש להזין תחילה את כתובת הסקר למטה —
-          החלון ייפתח ישירות בדף הקרוסטאבים שלו, ומיד לאחר ההתחברות ההורדה מתחילה
-          אוטומטית באותו הדפדפן. אין צורך ללחוץ "הרץ".
+          הזינו את כתובת הסקר ולחצו על הכפתור — ייפתח כאן חלון התחברות ל-Decipher.
+          החלון מריץ דפדפן בתוך השירות, כך שההתחברות (כולל אימות דו-שלבי) נשמרת במקום
+          הנכון, והוא נפתח ישירות בדף הקרוסטאבים של הסקר. מיד לאחר ההתחברות ההורדה
+          מתחילה אוטומטית באותו הדפדפן.
         </p>
         <div class="session-actions">
-          <button type="button" id="login-start">התחברות והרצה</button>
-          <button type="button" id="session-upload-toggle" class="link-button">או העלאת קובץ auth_state.json</button>
+          <button type="button" id="session-upload-toggle" class="link-button">העלאת קובץ auth_state.json במקום</button>
         </div>
 
         <div id="upload-fallback" class="upload-fallback hidden">
@@ -100,6 +99,7 @@
           או לדף הפרויקט בפורטל (<code dir="ltr">/apps/portal/#/projects/detail/...</code>).
         </p>
         <button type="submit" id="run-button">הרץ</button>
+        <p class="field-hint" id="run-hint"></p>
       </form>
 
       <div id="result" class="result hidden">
@@ -136,6 +136,7 @@
     const sessionFile = document.getElementById('session-file');
     const sessionSubmit = document.getElementById('session-submit');
     const sessionError = document.getElementById('session-error');
+    const runHint = document.getElementById('run-hint');
 
     let pollTimer = null;
     let shownLines = 0;
@@ -145,11 +146,17 @@
     function renderSession(present) {
       sessionPresent = present;
       sessionDot.className = 'session-dot ' + (present ? 'ok' : 'missing');
-      sessionText.textContent = present ? 'החיבור ל-Decipher פעיל' : 'נדרשת העלאת קובץ התחברות';
+      sessionText.textContent = present ? 'החיבור ל-Decipher פעיל' : 'לא מחובר ל-Decipher';
       // With no session there's nothing to toggle -- the upload box is already open.
       sessionToggle.classList.toggle('hidden', !present);
       sessionUpload.classList.toggle('hidden', present);
-      runButton.disabled = !present;
+
+      // Run stays clickable either way. Disabling it while unconnected left a dead button
+      // with no stated reason; instead it opens the login window and carries on into the run.
+      runButton.textContent = present ? 'הרץ' : 'התחברות והרצה';
+      runHint.textContent = present
+        ? ''
+        : 'לחיצה על הכפתור תפתח חלון התחברות ל-Decipher, ומיד לאחריה תתחיל ההורדה.';
     }
 
     async function loadSession() {
@@ -175,7 +182,6 @@
     const loginState = document.getElementById('login-state');
     const loginCountdown = document.getElementById('login-countdown');
     const loginFrame = document.getElementById('login-frame');
-    const loginStart = document.getElementById('login-start');
     const loginDone = document.getElementById('login-done');
     const loginCancel = document.getElementById('login-cancel');
 
@@ -256,17 +262,16 @@
       }
     }
 
-    loginStart.addEventListener('click', async () => {
-      const surveyUrl = document.getElementById('survey_url').value.trim();
+    async function startInteractiveLogin(surveyUrl) {
       sessionError.classList.add('hidden');
 
       if (!surveyUrl) {
         sessionError.textContent = 'הזינו קודם את כתובת ה-URL של הסקר.';
         sessionError.classList.remove('hidden');
-        return;
+        return false;
       }
 
-      loginStart.disabled = true;
+      runButton.disabled = true;
       try {
         const res = await fetch('api/login/start', {
           method: 'POST',
@@ -281,10 +286,11 @@
           // Nothing to wait for in this environment -- open the upload fallback and hide the
           // button, so the user is left with the path that does work rather than a dead end.
           if (data.unavailable) {
+            sessionUpload.classList.remove('hidden');
             document.getElementById('upload-fallback').classList.remove('hidden');
-            loginStart.classList.add('hidden');
+            runHint.textContent = 'בסביבה זו יש להעלות קובץ auth_state.json כדי להריץ.';
           }
-          return;
+          return false;
         }
 
         loginJobId = data.job_id || null;
@@ -294,13 +300,15 @@
         // Small delay: x11vnc needs to be listening before noVNC attempts to connect.
         setTimeout(() => { loginFrame.src = vncUrl(data.password); }, 1200);
         pollLogin();
+        return true;
       } catch (err) {
         sessionError.textContent = `שגיאה: ${err.message}`;
         sessionError.classList.remove('hidden');
+        return false;
       } finally {
-        loginStart.disabled = false;
+        runButton.disabled = false;
       }
-    });
+    }
 
     loginDone.addEventListener('click', async () => {
       loginState.textContent = 'שומר את ההתחברות...';
@@ -423,6 +431,14 @@
       if (pollTimer) clearTimeout(pollTimer);
 
       const surveyUrl = document.getElementById('survey_url').value.trim();
+
+      // No session yet: log in first, which then continues into the download on its own.
+      // This is why Run is never disabled -- it always does the next useful thing.
+      if (!sessionPresent) {
+        await startInteractiveLogin(surveyUrl);
+        return;
+      }
+
       runButton.disabled = true;
       resetView();
 
