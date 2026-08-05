@@ -425,3 +425,8 @@ button[type="submit"]:disabled { opacity: 0.55; cursor: default; }
 
 .upload-fallback { margin-top: 12px; }
 .upload-fallback.hidden { display: none; }
+
+/* Generic hide utility. Every other .hidden rule in this file is element-scoped
+   (.result.hidden, .link-button.hidden, ...), so adding the class to anything else -- a plain
+   button, say -- silently did nothing. Last in the file so it wins specificity ties. */
+.hidden { display: none; }

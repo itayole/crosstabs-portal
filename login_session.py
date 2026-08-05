@@ -16,6 +16,7 @@ login runs at a time; there's a single virtual display and VNC port.
 import os
 import queue
 import secrets
+import shutil
 import socket
 import subprocess
 import threading
@@ -42,6 +43,30 @@ VNC_PASSWORD_LEN = 8
 
 class LoginBusy(Exception):
     """Another login is already in progress."""
+
+
+class LoginUnavailable(Exception):
+    """This environment can't run the streamed login (e.g. the local venv on Windows)."""
+
+
+REQUIRED_BINARIES = ("Xvfb", "x11vnc")
+
+
+def preflight() -> str | None:
+    """Reason the streamed login can't run here, or None if it can.
+
+    Checked before spawning anything: without this, a missing Xvfb surfaces as a bare
+    "[WinError 2] The system cannot find the file specified" from a worker thread, which
+    tells the user nothing. Only the Docker image carries these binaries.
+    """
+    missing = [name for name in REQUIRED_BINARIES if shutil.which(name) is None]
+    if missing:
+        return (
+            "התחברות בחלון זמינה רק כשהשירות רץ בקונטיינר Docker "
+            f"(חסר בסביבה זו: {', '.join(missing)}). "
+            "העלו קובץ auth_state.json במקום."
+        )
+    return None
 
 
 def _wait_for_x_socket(display: str, timeout: float = 15.0) -> None:
@@ -229,6 +254,9 @@ def start(survey_url: str) -> dict:
     with _current_lock:
         if _current is not None and _current.active:
             raise LoginBusy("התחברות אחרת מתבצעת כרגע. המתינו לסיומה או בטלו אותה.")
+        reason = preflight()
+        if reason:
+            raise LoginUnavailable(reason)
         dl.parse_survey_url(survey_url)   # fail fast on a bad URL, before spawning anything
         _current = _Session(survey_url)
         _current.start()

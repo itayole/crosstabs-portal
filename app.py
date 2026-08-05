@@ -187,8 +187,17 @@ def api_session_upload():
 def api_login_start():
     data = request.get_json(silent=True) or {}
     survey_url = (data.get("survey_url") or "").strip()
+    if not NOVNC_DIR.is_dir():
+        return jsonify({
+            "error": "רכיב התצוגה (noVNC) אינו מותקן בסביבה זו — התחברות בחלון זמינה "
+                     "רק בקונטיינר. העלו קובץ auth_state.json במקום.",
+            "unavailable": True,
+        }), 503
+
     try:
         return jsonify(login.start(survey_url))
+    except login.LoginUnavailable as exc:
+        return jsonify({"error": str(exc), "unavailable": True}), 503
     except login.LoginBusy as exc:
         return jsonify({"error": str(exc)}), 409
     except ValueError as exc:

@@ -267,6 +267,12 @@
         if (!res.ok) {
           sessionError.textContent = data.error || 'לא ניתן לפתוח חלון התחברות.';
           sessionError.classList.remove('hidden');
+          // Nothing to wait for in this environment -- open the upload fallback and hide the
+          // button, so the user is left with the path that does work rather than a dead end.
+          if (data.unavailable) {
+            document.getElementById('upload-fallback').classList.remove('hidden');
+            loginStart.classList.add('hidden');
+          }
           return;
         }
 
