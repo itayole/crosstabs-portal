@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "// crosstabs-dev": "DEFAULT (listed first) because it has no external dependencies -- just the local .venv. Flask dev server with auto-reload, so template/CSS/Python edits apply immediately. Serves the page, the session upload, and all API routes. Cannot do a real crosstab run or the streamed Decipher login: that needs Playwright's Chromium plus xvfb/x11vnc/novnc, which only exist in the Docker image. Use crosstabs-docker for those.",
+      "// crosstabs-dev": "DEFAULT (listed first) because it has no external dependencies -- just the local .venv. Flask dev server with auto-reload, so template/CSS/Python edits apply immediately. Chromium is installed in the venv (python -m playwright install chromium), so real crosstab runs work here given a valid session. The one thing it cannot do is the streamed Decipher login, which needs xvfb/x11vnc/novnc -- those exist only in the Docker image, and attempting it returns a clear 503 rather than failing obscurely.",
       "name": "crosstabs-dev",
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": [

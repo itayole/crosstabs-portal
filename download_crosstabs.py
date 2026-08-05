@@ -46,6 +46,27 @@ class LoginRequired(Exception):
     pass
 
 
+class BrowserMissing(Exception):
+    """Playwright is installed but its browser binary isn't."""
+
+
+def launch_chromium(playwright, **kwargs):
+    """Launch Chromium, turning the missing-binary case into something readable.
+
+    Playwright otherwise raises a multi-line ASCII-art box telling the user to run
+    `playwright install`, which ends up rendered verbatim in the page's error line.
+    """
+    try:
+        return playwright.chromium.launch(**kwargs)
+    except Exception as exc:                         # noqa: BLE001 - inspected and re-raised
+        if "Executable doesn't exist" in str(exc):
+            raise BrowserMissing(
+                "דפדפן Playwright אינו מותקן בסביבה זו. בקונטיינר הוא מותקן מראש; "
+                "בהרצה מקומית הריצו: python -m playwright install chromium"
+            ) from exc
+        raise
+
+
 def ensure_logged_in(page, list_url: str):
     page.goto(list_url, wait_until="networkidle", timeout=NAV_TIMEOUT)
     if is_login_page(page):
@@ -182,7 +203,7 @@ def run_download(survey_url: str, output: Path = None, root: Path = None, progre
     list_url = survey_list_url(survey_url)
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = launch_chromium(playwright, headless=True)
         context = browser.new_context(storage_state=str(AUTH_FILE), accept_downloads=True)
         page = context.new_page()
         try:

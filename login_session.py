@@ -187,7 +187,8 @@ class _Session:
 
         env = {**os.environ, "DISPLAY": DISPLAY}
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
+            browser = dl.launch_chromium(
+                playwright,
                 headless=False,
                 env=env,
                 args=[
