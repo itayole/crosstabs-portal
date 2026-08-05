@@ -41,10 +41,11 @@
         <p class="session-help">
           התחברו ל-Decipher בחלון שייפתח כאן. החלון מריץ דפדפן בתוך השירות, כך שההתחברות
           (כולל אימות דו-שלבי) נשמרת במקום הנכון. יש להזין תחילה את כתובת הסקר למטה —
-          החלון ייפתח ישירות בדף הקרוסטאבים שלו.
+          החלון ייפתח ישירות בדף הקרוסטאבים שלו, ומיד לאחר ההתחברות ההורדה מתחילה
+          אוטומטית באותו הדפדפן. אין צורך ללחוץ "הרץ".
         </p>
         <div class="session-actions">
-          <button type="button" id="login-start">פתיחת חלון התחברות</button>
+          <button type="button" id="login-start">התחברות והרצה</button>
           <button type="button" id="session-upload-toggle" class="link-button">או העלאת קובץ auth_state.json</button>
         </div>
 
@@ -176,11 +177,16 @@
 
     let loginPollTimer = null;
 
+    let loginJobId = null;
+    let loginJobPolling = false;
+
     const LOGIN_LABELS = {
       starting: 'מכין חלון התחברות...',
       awaiting_login: 'התחברו ל-Decipher בחלון שלמטה',
       in_progress: 'ממתין להשלמת ההתחברות (כולל אימות דו-שלבי)...',
-      ready: 'ההתחברות זוהתה — שומר...',
+      ready: 'ההתחברות זוהתה — מתחיל בהורדה...',
+      downloading: 'מוריד את הקרוסטאבים באותו הדפדפן...',
+      finished: 'הסתיים',
       closed: 'חלון ההתחברות נסגר',
     };
 
@@ -222,16 +228,17 @@
           ? `${Math.floor(data.seconds_left / 60)}:${String(data.seconds_left % 60).padStart(2, '0')}`
           : '';
 
-        if (data.saved) {
-          closeLoginCard();
-          await loadSession();
-          statusLine.textContent = '';
-          return;
+        // The download runs in the same browser, so start streaming the job's progress as
+        // soon as it begins rather than waiting for the login window to close.
+        if (data.state === 'downloading' && loginJobId && !loginJobPolling) {
+          loginJobPolling = true;
+          resetView();
+          poll(loginJobId);
         }
 
         if (!data.active) {
           closeLoginCard();
-          if (data.error) {
+          if (data.error && !loginJobPolling) {
             sessionError.textContent = data.error;
             sessionError.classList.remove('hidden');
           }
@@ -276,6 +283,8 @@
           return;
         }
 
+        loginJobId = data.job_id || null;
+        loginJobPolling = false;
         loginCard.classList.remove('hidden');
         loginState.textContent = LOGIN_LABELS.starting;
         // Small delay: x11vnc needs to be listening before noVNC attempts to connect.

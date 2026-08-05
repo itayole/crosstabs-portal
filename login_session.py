@@ -92,13 +92,21 @@ def _wait_for_port(port: int, timeout: float = 15.0) -> None:
 
 
 class _Session:
-    def __init__(self, survey_url: str):
+    def __init__(self, survey_url: str, after_login=None, on_failure=None):
         self.survey_url = survey_url
+        self.list_url = None
         self.password = secrets.token_urlsafe(16)[:VNC_PASSWORD_LEN]
-        self.state = "starting"   # starting | awaiting_login | in_progress | ready | closed
+        # starting | awaiting_login | in_progress | ready | downloading | finished | closed
+        self.state = "starting"
         self.error = None
         self.saved = False
         self.created_at = time.time()
+
+        # after_login(page, list_url) runs the download in this session's own browser, in
+        # this thread. on_failure(reason) fires if we never get that far.
+        self._after_login = after_login
+        self._on_failure = on_failure
+        self._handed_off = False
 
         self._commands = queue.Queue()
         self._closed = threading.Event()
@@ -144,8 +152,15 @@ class _Session:
         finally:
             self._stop_processes()
             self._closed.set()
-            if self.state != "closed":
+            if self.state not in ("finished", "closed"):
                 self.state = "closed"
+            # Nobody ever took over the browser, so whatever is waiting on the run has to be
+            # told -- otherwise a timed-out or cancelled login leaves a job running forever.
+            if not self._handed_off and self._on_failure is not None:
+                try:
+                    self._on_failure(self.error or "חלון ההתחברות נסגר לפני שההתחברות הושלמה.")
+                except Exception:                    # noqa: BLE001 - best effort
+                    pass
 
     def _start_display(self):
         self._procs.append(subprocess.Popen(
@@ -167,8 +182,8 @@ class _Session:
         _wait_for_port(VNC_PORT)
 
     def _drive_browser(self):
-        origin, survey_path = dl.parse_survey_url(self.survey_url)
-        list_url = f"{origin}/apps/report/{survey_path}#!/"
+        list_url = dl.survey_list_url(self.survey_url)
+        self.list_url = list_url
 
         env = {**os.environ, "DISPLAY": DISPLAY}
         with sync_playwright() as playwright:
@@ -183,7 +198,9 @@ class _Session:
                 ],
             )
             # no_viewport so the page fills the window the user is actually looking at.
-            context = browser.new_context(no_viewport=True)
+            # accept_downloads because this same context goes on to do the crosstab
+            # downloads once login completes.
+            context = browser.new_context(no_viewport=True, accept_downloads=True)
             page = context.new_page()
             try:
                 page.goto(list_url, wait_until="domcontentloaded", timeout=60_000)
@@ -212,9 +229,29 @@ class _Session:
             # "finish" lets the user force it if the heuristic misses.
             if self.state == "ready" or command == "finish":
                 self._save(context)
+                self._hand_off(page)
                 return
 
         self.error = "חלון ההתחברות פג. נסו שוב."
+
+    def _hand_off(self, page):
+        """Carry straight on into the download, in the browser the user just logged in with.
+
+        Runs inline in this thread, which is what the sync Playwright API requires. Note this
+        is deliberately outside the login deadline loop: once downloading starts, the login
+        timeout must not apply or a long run would be torn down mid-flight.
+        """
+        if self._after_login is None:
+            return
+
+        self._handed_off = True
+        self.state = "downloading"
+        try:
+            self._after_login(page, self.list_url)
+        except Exception as exc:                     # noqa: BLE001 - reported via the job
+            self.error = str(exc)
+        finally:
+            self.state = "finished"
 
     @staticmethod
     def _detect(page) -> str:
@@ -249,7 +286,7 @@ _current = None
 _current_lock = threading.Lock()
 
 
-def start(survey_url: str) -> dict:
+def start(survey_url: str, after_login=None, on_failure=None) -> dict:
     global _current
     with _current_lock:
         if _current is not None and _current.active:
@@ -258,7 +295,7 @@ def start(survey_url: str) -> dict:
         if reason:
             raise LoginUnavailable(reason)
         dl.parse_survey_url(survey_url)   # fail fast on a bad URL, before spawning anything
-        _current = _Session(survey_url)
+        _current = _Session(survey_url, after_login=after_login, on_failure=on_failure)
         _current.start()
         # The one place the VNC password is disclosed: to the client that opened the login.
         return {**_current.snapshot(), "password": _current.password}

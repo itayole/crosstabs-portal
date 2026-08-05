@@ -86,6 +86,14 @@ def _new_job():
     return job_id
 
 
+def _discard_job(job_id):
+    """Drop a job that never started, and its directory with it."""
+    with _jobs_lock:
+        job = _jobs.pop(job_id, None)
+    if job:
+        shutil.rmtree(job["job_dir"], ignore_errors=True)
+
+
 def _log(job_id, message):
     with _jobs_lock:
         _jobs[job_id]["log"].append(message)
@@ -117,6 +125,34 @@ def _run_job(job_id, survey_url):
     except Exception as exc:
         _log(job_id, f"Error: {exc}")
         _finish(job_id, error=str(exc))
+
+
+def _continue_after_login(job_id, page, list_url):
+    """Run the download in the browser the user just logged in with.
+
+    Called from the login session's own thread once login is detected, so the authenticated
+    browser is reused rather than discarded and rebuilt from auth_state.json.
+    """
+    with _jobs_lock:
+        job_dir = _jobs[job_id]["job_dir"]
+    try:
+        output_dir = dl.download_all(
+            page, list_url, root=job_dir, progress=lambda m: _log(job_id, m)
+        )
+        combined_path = combine.run_combine(output_dir, progress=lambda m: _log(job_id, m))
+        _finish(job_id, result_file=combined_path)
+    except Exception as exc:                         # noqa: BLE001 - surfaced on the job
+        _log(job_id, f"Error: {exc}")
+        _finish(job_id, error=str(exc))
+
+
+def _fail_job(job_id, reason):
+    with _jobs_lock:
+        already_done = _jobs.get(job_id, {}).get("status") != "running"
+    if already_done:
+        return
+    _log(job_id, reason)
+    _finish(job_id, error=reason)
 
 
 def _prune_old_jobs():
@@ -187,6 +223,13 @@ def api_session_upload():
 def api_login_start():
     data = request.get_json(silent=True) or {}
     survey_url = (data.get("survey_url") or "").strip()
+    # Validate the input before anything else: a bad URL is a bad URL regardless of what this
+    # environment can run, and this also avoids creating an orphan job dir for it.
+    try:
+        dl.parse_survey_url(survey_url)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
     if not NOVNC_DIR.is_dir():
         return jsonify({
             "error": "רכיב התצוגה (noVNC) אינו מותקן בסביבה זו — התחברות בחלון זמינה "
@@ -194,16 +237,30 @@ def api_login_start():
             "unavailable": True,
         }), 503
 
+    _prune_old_jobs()
+    job_id = _new_job()
+
     try:
-        return jsonify(login.start(survey_url))
+        result = login.start(
+            survey_url,
+            after_login=lambda page, list_url: _continue_after_login(job_id, page, list_url),
+            on_failure=lambda reason: _fail_job(job_id, reason),
+        )
     except login.LoginUnavailable as exc:
+        _discard_job(job_id)
         return jsonify({"error": str(exc), "unavailable": True}), 503
     except login.LoginBusy as exc:
+        _discard_job(job_id)
         return jsonify({"error": str(exc)}), 409
     except ValueError as exc:
+        _discard_job(job_id)
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:                         # noqa: BLE001 - Xvfb/x11vnc failures
+        _discard_job(job_id)
         return jsonify({"error": f"לא ניתן לפתוח חלון התחברות: {exc}"}), 500
+
+    # job_id lets the page poll the run's progress the same way a manual Run does.
+    return jsonify({**result, "job_id": job_id})
 
 
 @app.route("/api/login/status")

@@ -116,65 +116,77 @@ def download_one_crosstab(page, list_url: str, index: int, expected_name: str, o
     return dest
 
 
-def run_download(survey_url: str, output: Path = None, root: Path = None, progress=None) -> Path:
-    """Download every custom crosstab for a survey as .xlsx. Returns the output directory.
-    Raises LoginRequired if the saved session is missing/expired.
-    progress(msg) is called with human-readable status lines, if provided.
+def download_all(page, list_url: str, output: Path = None, root: Path = None, progress=None) -> Path:
+    """Download every custom crosstab using a page that is already open and authenticated.
+
+    Split out from run_download so the interactive login can carry straight on into the
+    download in the browser the user just logged in with, instead of saving the session,
+    closing that browser and opening a second one to redo the same navigation. It also
+    avoids depending on storage_state() being a complete picture of the session -- it does
+    not carry sessionStorage, so a re-created browser is not guaranteed equivalent.
 
     output pins the folder outright; root instead keeps the survey-named subfolder (which
     also names the combined workbook) but places it under a caller-chosen parent -- the web
     app uses this to give each job its own directory so concurrent runs can't overwrite
-    each other's files."""
+    each other's files.
+    """
     def log(msg):
         if progress:
             progress(msg)
 
+    survey_name = page.title().strip() or "survey"
+    output_dir = Path(output) if output else Path(root or DOWNLOADS_ROOT) / sanitize_filename(survey_name)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    all_cards = list_crosstab_cards(page)
+    custom_cards = [c for c in all_cards if not c["automatic"]]
+
+    if not custom_cards:
+        raise RuntimeError("לא נמצאו קרוסטאבים מותאמים אישית בסקר הזה.")
+
+    log(f"Found {len(custom_cards)} custom crosstab(s) out of {len(all_cards)} total.")
+
+    failures = []
+    for item in custom_cards:
+        log(f"Downloading: {item['name']} ...")
+        try:
+            dest = download_one_crosstab(page, list_url, item["index"], item["name"], output_dir)
+            log(f"Saved: {dest.name}")
+        except Exception as exc:                     # noqa: BLE001 - reported per crosstab
+            log(f"FAILED: {item['name']} ({exc})")
+            failures.append(item["name"])
+
+    if failures:
+        raise RuntimeError(f"Failed to download: {', '.join(failures)}")
+
+    return output_dir
+
+
+def survey_list_url(survey_url: str) -> str:
+    origin, survey_path = parse_survey_url(survey_url)
+    return f"{origin}/apps/report/{survey_path}#!/"
+
+
+def run_download(survey_url: str, output: Path = None, root: Path = None, progress=None) -> Path:
+    """Download every custom crosstab for a survey as .xlsx, in a browser of our own.
+
+    Used when there is no live login to piggyback on -- i.e. the session came from an
+    uploaded auth_state.json, or from a login earlier on. Returns the output directory and
+    raises LoginRequired if the stored session is missing or expired."""
     if not AUTH_FILE.exists():
         raise LoginRequired(
             "לא נטען קובץ התחברות. הריצו את שלב ההתחברות בסקריפט הדסקטופ "
             "והעלו כאן את קובץ auth_state.json."
         )
 
-    origin, survey_path = parse_survey_url(survey_url)
-    list_url = f"{origin}/apps/report/{survey_path}#!/"
+    list_url = survey_list_url(survey_url)
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=str(AUTH_FILE))
+        context = browser.new_context(storage_state=str(AUTH_FILE), accept_downloads=True)
         page = context.new_page()
-
         try:
             ensure_logged_in(page, list_url)
-        except LoginRequired:
+            return download_all(page, list_url, output=output, root=root, progress=progress)
+        finally:
             browser.close()
-            raise
-
-        survey_name = page.title().strip() or survey_path.replace("/", "_")
-        output_dir = Path(output) if output else Path(root or DOWNLOADS_ROOT) / sanitize_filename(survey_name)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        all_cards = list_crosstab_cards(page)
-        custom_cards = [c for c in all_cards if not c["automatic"]]
-
-        if not custom_cards:
-            browser.close()
-            raise RuntimeError("No custom crosstabs found for this survey.")
-
-        log(f"Found {len(custom_cards)} custom crosstab(s) out of {len(all_cards)} total.")
-
-        failures = []
-        for item in custom_cards:
-            log(f"Downloading: {item['name']} ...")
-            try:
-                dest = download_one_crosstab(page, list_url, item["index"], item["name"], output_dir)
-                log(f"Saved: {dest.name}")
-            except Exception as exc:
-                log(f"FAILED: {item['name']} ({exc})")
-                failures.append(item["name"])
-
-        browser.close()
-
-        if failures:
-            raise RuntimeError(f"Failed to download: {', '.join(failures)}")
-
-        return output_dir
