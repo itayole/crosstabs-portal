@@ -430,3 +430,18 @@ button[type="submit"]:disabled { opacity: 0.55; cursor: default; }
    (.result.hidden, .link-button.hidden, ...), so adding the class to anything else -- a plain
    button, say -- silently did nothing. Last in the file so it wins specificity ties. */
 .hidden { display: none; }
+
+.field-hint {
+  margin: 2px 0 0;
+  color: var(--subtitle);
+  font-size: 0.76rem;
+  line-height: 1.6;
+}
+.field-hint code {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.74rem;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--zone-bg);
+  border: 1px solid var(--border);
+}

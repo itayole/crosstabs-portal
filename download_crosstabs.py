@@ -21,16 +21,37 @@ NAV_TIMEOUT = 30_000
 INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
 
 
+# Decipher exposes the same survey under two link shapes, and people paste either one:
+#
+#   report/crosstabs view  .../apps/report/selfserve/2403/260755#!/
+#       -> survey path is in the URL path
+#   portal project page    .../apps/portal/#/projects/detail/selfserve/2403/260808
+#       -> survey path is in the *fragment*, which urlsplit keeps out of .path entirely,
+#          so searching only the path could never match it
+#
+# Both reduce to the same survey path ("selfserve/2403/260808"), from which survey_list_url
+# builds the canonical crosstabs URL.
+_REPORT_PATH_RE = re.compile(r"/apps/report/(.+?)/?$")
+_PROJECT_DETAIL_RE = re.compile(r"/projects/detail/(.+?)/?$")
+
+
 def parse_survey_url(url: str):
     parts = urlsplit(url)
     if not parts.scheme or not parts.netloc:
-        raise ValueError(f"Not a full URL (missing scheme/host): {url}")
-    match = re.search(r"/apps/report/(.+?)/?$", parts.path)
-    if not match:
-        raise ValueError(f"Could not find a survey path (/apps/report/...) in URL: {url}")
+        raise ValueError(f"הכתובת אינה מלאה (חסר http/https או שם מתחם): {url}")
+
     origin = f"{parts.scheme}://{parts.netloc}"
-    survey_path = match.group(1).strip("/")
-    return origin, survey_path
+
+    for pattern, text in ((_REPORT_PATH_RE, parts.path), (_PROJECT_DETAIL_RE, parts.fragment)):
+        match = pattern.search(text)
+        if match:
+            return origin, match.group(1).strip("/")
+
+    raise ValueError(
+        "לא זוהה נתיב סקר בכתובת. הדביקו קישור לדף הקרוסטאבים "
+        "(/apps/report/...) או לדף הפרויקט בפורטל "
+        f"(/apps/portal/#/projects/detail/...): {url}"
+    )
 
 
 def sanitize_filename(name: str) -> str:
