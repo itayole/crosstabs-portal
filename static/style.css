@@ -445,3 +445,15 @@ button[type="submit"]:disabled { opacity: 0.55; cursor: default; }
   background: var(--zone-bg);
   border: 1px solid var(--border);
 }
+
+.session-actions #connect-button {
+  padding: 9px 22px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.session-actions #connect-button:disabled { opacity: 0.55; cursor: default; }

@@ -20,11 +20,13 @@
     </header>
 
     <ol class="steps">
-      <li class="step" data-step="1"><span class="dot">1</span><span class="label">כתובת סקר</span></li>
+      <li class="step" data-step="0"><span class="dot">1</span><span class="label">התחברות</span></li>
       <li class="connector"></li>
-      <li class="step" data-step="2"><span class="dot">2</span><span class="label">עיבוד</span></li>
+      <li class="step" data-step="1"><span class="dot">2</span><span class="label">כתובת סקר</span></li>
       <li class="connector"></li>
-      <li class="step" data-step="3"><span class="dot">3</span><span class="label">תוצאה</span></li>
+      <li class="step" data-step="2"><span class="dot">3</span><span class="label">עיבוד</span></li>
+      <li class="connector"></li>
+      <li class="step" data-step="3"><span class="dot">4</span><span class="label">תוצאה</span></li>
     </ol>
 
     <!-- Session panel. Decipher requires 2FA so the container can never log in itself; it
@@ -39,12 +41,13 @@
 
       <div id="session-upload" class="session-upload hidden">
         <p class="session-help">
-          הזינו את כתובת הסקר ולחצו על הכפתור — ייפתח כאן חלון התחברות ל-Decipher.
-          החלון מריץ דפדפן בתוך השירות, כך שההתחברות (כולל אימות דו-שלבי) נשמרת במקום
-          הנכון, והוא נפתח ישירות בדף הקרוסטאבים של הסקר. מיד לאחר ההתחברות ההורדה
-          מתחילה אוטומטית באותו הדפדפן.
+          חיבור ל-Decipher נדרש לכל פעולה בכלי. לחיצה על "התחברות" תפתח כאן דפדפן שרץ
+          בתוך השירות, כך שההתחברות (כולל אימות דו-שלבי) נשמרת במקום הנכון.
+          אם הוזנה כבר כתובת סקר, החלון ייפתח ישירות בדף הקרוסטאבים שלה וההורדה
+          תתחיל אוטומטית מיד לאחר ההתחברות.
         </p>
         <div class="session-actions">
+          <button type="button" id="connect-button">התחברות ל-Decipher</button>
           <button type="button" id="session-upload-toggle" class="link-button">העלאת קובץ auth_state.json במקום</button>
         </div>
 
@@ -137,6 +140,7 @@
     const sessionSubmit = document.getElementById('session-submit');
     const sessionError = document.getElementById('session-error');
     const runHint = document.getElementById('run-hint');
+    const connectButton = document.getElementById('connect-button');
 
     let pollTimer = null;
     let shownLines = 0;
@@ -151,12 +155,14 @@
       sessionToggle.classList.toggle('hidden', !present);
       sessionUpload.classList.toggle('hidden', present);
 
-      // Run stays clickable either way. Disabling it while unconnected left a dead button
-      // with no stated reason; instead it opens the login window and carries on into the run.
-      runButton.textContent = present ? 'הרץ' : 'התחברות והרצה';
+      // Connecting is a precondition, so Run is gated on it -- but the gate has to explain
+      // itself. An unexplained dead button reads as "my URL was rejected", which is why the
+      // hint names the missing step and step 1 stays highlighted until connected.
+      runButton.disabled = !present;
       runHint.textContent = present
         ? ''
-        : 'לחיצה על הכפתור תפתח חלון התחברות ל-Decipher, ומיד לאחריה תתחיל ההורדה.';
+        : 'יש להתחבר ל-Decipher (שלב 1) לפני הרצה. אפשר להזין כאן את כתובת הסקר מראש — ההורדה תתחיל אוטומטית עם ההתחברות.';
+      setStep(present ? 1 : 0);
     }
 
     async function loadSession() {
@@ -189,6 +195,7 @@
 
     let loginJobId = null;
     let loginJobPolling = false;
+    let vncPassword = null;
 
     const LOGIN_LABELS = {
       starting: 'מכין חלון התחברות...',
@@ -200,17 +207,19 @@
       closed: 'חלון ההתחברות נסגר',
     };
 
-    // The page may be served at / or under /crosstabs/, and noVNC wants the WebSocket path
-    // relative to the host root with no leading slash. Derive it from where we actually are
-    // rather than hardcoding either layout.
+    // noVNC resolves `path` against its OWN document URL, not the site root -- passing
+    // "vnc-ws" from the viewer at /vnc/ made it open ws://host/vnc/vnc-ws and fail with 1006.
+    // The viewer always sits one level below the app root, so "../vnc-ws" reaches the relay
+    // whether the app is served at / or under /crosstabs/. No prefix detection needed.
     function vncUrl(password) {
-      const base = location.pathname.replace(/[^/]*$/, '');
-      const wsPath = (base + 'vnc-ws').replace(/^\//, '');
       const params = new URLSearchParams({
-        path: wsPath,
+        path: '../vnc-ws',
         password: password,
         autoconnect: '1',
-        reconnect: '0',
+        // Retry rather than give up: even with vnc_ready gating, the first attempt can land
+        // a moment early, and noVNC treats a refused connection as terminal otherwise.
+        reconnect: '1',
+        reconnect_delay: '1500',
         resize: 'scale',
         view_only: '0',
       });
@@ -224,7 +233,8 @@
 
     function closeLoginCard() {
       stopLoginPolling();
-      loginFrame.src = 'about:blank';
+      loginFrame.removeAttribute('src');   // so the next login re-attaches on vnc_ready
+      vncPassword = null;
       loginCard.classList.add('hidden');
     }
 
@@ -234,6 +244,11 @@
         const data = await res.json();
 
         loginState.textContent = LOGIN_LABELS[data.state] || data.state || '';
+
+        // Attach the viewer only once x11vnc is up, and only once.
+        if (data.vnc_ready && vncPassword && !loginFrame.getAttribute('src')) {
+          loginFrame.src = vncUrl(vncPassword);
+        }
         loginCountdown.textContent = data.seconds_left
           ? `${Math.floor(data.seconds_left / 60)}:${String(data.seconds_left % 60).padStart(2, '0')}`
           : '';
@@ -262,16 +277,12 @@
       }
     }
 
+    // surveyUrl is optional: connecting has to be possible before a survey is chosen, since
+    // it's a precondition for everything else. If one is supplied the login opens on it and
+    // the download follows automatically.
     async function startInteractiveLogin(surveyUrl) {
       sessionError.classList.add('hidden');
-
-      if (!surveyUrl) {
-        sessionError.textContent = 'הזינו קודם את כתובת ה-URL של הסקר.';
-        sessionError.classList.remove('hidden');
-        return false;
-      }
-
-      runButton.disabled = true;
+      connectButton.disabled = true;
       try {
         const res = await fetch('api/login/start', {
           method: 'POST',
@@ -297,8 +308,10 @@
         loginJobPolling = false;
         loginCard.classList.remove('hidden');
         loginState.textContent = LOGIN_LABELS.starting;
-        // Small delay: x11vnc needs to be listening before noVNC attempts to connect.
-        setTimeout(() => { loginFrame.src = vncUrl(data.password); }, 1200);
+        // The iframe is pointed at the relay by pollLogin once the server reports vnc_ready.
+        // A fixed delay was wrong: bringing up Xvfb, x11vnc and Chromium takes several
+        // seconds, so noVNC connected to a closed port and gave up.
+        vncPassword = data.password;
         pollLogin();
         return true;
       } catch (err) {
@@ -306,9 +319,14 @@
         sessionError.classList.remove('hidden');
         return false;
       } finally {
-        runButton.disabled = false;
+        connectButton.disabled = false;
       }
     }
+
+    connectButton.addEventListener('click', () => {
+      // Pre-filled URL is used when present, so connecting can go straight into the run.
+      startInteractiveLogin(document.getElementById('survey_url').value.trim());
+    });
 
     loginDone.addEventListener('click', async () => {
       loginState.textContent = 'שומר את ההתחברות...';
@@ -432,9 +450,7 @@
 
       const surveyUrl = document.getElementById('survey_url').value.trim();
 
-      // No session yet: log in first, which then continues into the download on its own.
-      // This is why Run is never disabled -- it always does the next useful thing.
-      if (!sessionPresent) {
+      if (!sessionPresent) {          // gated by renderSession; belt and braces
         await startInteractiveLogin(surveyUrl);
         return;
       }

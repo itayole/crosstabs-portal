@@ -27,6 +27,13 @@ import combine_crosstabs as combine
 import login_session as login
 
 app = Flask(__name__)
+
+# noVNC offers the "binary" subprotocol when opening the RFB WebSocket. RFC 6455 lets a client
+# fail the connection if the server selects none of the subprotocols it offered, and browsers
+# do exactly that -- noVNC reported "Failed to connect to server" while a hand-rolled client
+# offering no subprotocol connected fine, which is what made this hard to spot. Echo it.
+app.config["SOCK_SERVER_OPTIONS"] = {"subprotocols": ["binary"]}
+
 sock = Sock(app)
 
 # Debian's novnc package. Served through this app rather than a second exposed port so the
@@ -88,6 +95,8 @@ def _new_job():
 
 def _discard_job(job_id):
     """Drop a job that never started, and its directory with it."""
+    if not job_id:                                   # connect-only logins have no job
+        return
     with _jobs_lock:
         job = _jobs.pop(job_id, None)
     if job:
@@ -223,12 +232,14 @@ def api_session_upload():
 def api_login_start():
     data = request.get_json(silent=True) or {}
     survey_url = (data.get("survey_url") or "").strip()
-    # Validate the input before anything else: a bad URL is a bad URL regardless of what this
-    # environment can run, and this also avoids creating an orphan job dir for it.
-    try:
-        dl.parse_survey_url(survey_url)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    # The survey URL is optional here: connecting to Decipher is a precondition for using the
+    # app at all, so it has to be possible before choosing a survey. When one *is* supplied we
+    # open directly on it and carry on into the download.
+    if survey_url:
+        try:
+            dl.parse_survey_url(survey_url)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
     if not NOVNC_DIR.is_dir():
         return jsonify({
@@ -238,13 +249,16 @@ def api_login_start():
         }), 503
 
     _prune_old_jobs()
-    job_id = _new_job()
+    job_id = _new_job() if survey_url else None
 
     try:
         result = login.start(
-            survey_url,
-            after_login=lambda page, list_url: _continue_after_login(job_id, page, list_url),
-            on_failure=lambda reason: _fail_job(job_id, reason),
+            survey_url or None,
+            after_login=(
+                (lambda page, list_url: _continue_after_login(job_id, page, list_url))
+                if job_id else None
+            ),
+            on_failure=(lambda reason: _fail_job(job_id, reason)) if job_id else None,
         )
     except login.LoginUnavailable as exc:
         _discard_job(job_id)

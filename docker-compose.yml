@@ -6,6 +6,9 @@ services:
     image: ghcr.io/itayole/crosstabs-portal:latest   # same tag the portal stack pulls
     container_name: crosstabs
     restart: unless-stopped
+    # The app is PID 1 otherwise, and Chromium's orphaned helpers would pile up as zombies
+    # after each interactive login. tini reaps them.
+    init: true
     ports:
       - "5000:5000"     # direct access; the portal gateway reaches it over the docker network
     # No volumes: auth_state.json is uploaded through the web UI and job output is scratch,

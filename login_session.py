@@ -17,6 +17,7 @@ import os
 import queue
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 import threading
@@ -26,6 +27,11 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 import download_crosstabs as dl
+
+# Connecting to Decipher is a precondition for the app, so a login can be started without a
+# survey in mind. With no survey URL we have no origin to derive, hence a configurable
+# default -- set DECIPHER_ORIGIN if the account lives on a different regional host.
+DEFAULT_ORIGIN = os.environ.get("DECIPHER_ORIGIN", "https://emea.focusvision.com").rstrip("/")
 
 DISPLAY = os.environ.get("LOGIN_DISPLAY", ":99")
 VNC_PORT = int(os.environ.get("LOGIN_VNC_PORT", "5900"))
@@ -92,14 +98,23 @@ def _wait_for_port(port: int, timeout: float = 15.0) -> None:
 
 
 class _Session:
-    def __init__(self, survey_url: str, after_login=None, on_failure=None):
-        self.survey_url = survey_url
+    def __init__(self, survey_url: str = None, after_login=None, on_failure=None):
+        self.survey_url = survey_url or None
         self.list_url = None
+        # "survey": opened on a specific crosstabs page, so the crosstab list is a definitive
+        # logged-in signal and the download can follow immediately.
+        # "portal": just connecting, with no survey in mind -- weaker signal, so readiness has
+        # to hold across consecutive polls before we trust it.
+        self.mode = "survey" if survey_url else "portal"
+        self._ready_streak = 0
         self.password = secrets.token_urlsafe(16)[:VNC_PASSWORD_LEN]
         # starting | awaiting_login | in_progress | ready | downloading | finished | closed
         self.state = "starting"
         self.error = None
         self.saved = False
+        # The page must not point noVNC at the relay until x11vnc is actually listening:
+        # connecting earlier fails outright, and noVNC does not retry by itself.
+        self.vnc_ready = False
         self.created_at = time.time()
 
         # after_login(page, list_url) runs the download in this session's own browser, in
@@ -135,6 +150,7 @@ class _Session:
             "state": self.state,
             "saved": self.saved,
             "error": self.error,
+            "vnc_ready": self.vnc_ready,
             "width": SCREEN_W,
             "height": SCREEN_H,
             "seconds_left": max(0, int(self.created_at + SESSION_TIMEOUT_SECONDS - time.time())),
@@ -180,10 +196,14 @@ class _Session:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         ))
         _wait_for_port(VNC_PORT)
+        self.vnc_ready = True
 
     def _drive_browser(self):
-        list_url = dl.survey_list_url(self.survey_url)
-        self.list_url = list_url
+        if self.survey_url:
+            self.list_url = dl.survey_list_url(self.survey_url)
+            target = self.list_url
+        else:
+            target = f"{DEFAULT_ORIGIN}/apps/portal/"
 
         env = {**os.environ, "DISPLAY": DISPLAY}
         with sync_playwright() as playwright:
@@ -204,7 +224,7 @@ class _Session:
             context = browser.new_context(no_viewport=True, accept_downloads=True)
             page = context.new_page()
             try:
-                page.goto(list_url, wait_until="domcontentloaded", timeout=60_000)
+                page.goto(target, wait_until="domcontentloaded", timeout=60_000)
                 self._command_loop(page, context)
             finally:
                 try:
@@ -242,7 +262,8 @@ class _Session:
         is deliberately outside the login deadline loop: once downloading starts, the login
         timeout must not apply or a long run would be torn down mid-flight.
         """
-        if self._after_login is None:
+        # Nothing to continue into when the user was only connecting.
+        if self._after_login is None or self.survey_url is None:
             return
 
         self._handed_off = True
@@ -254,13 +275,25 @@ class _Session:
         finally:
             self.state = "finished"
 
-    @staticmethod
-    def _detect(page) -> str:
+    def _detect(self, page) -> str:
         try:
             if page.locator('input[type="password"]').count() > 0:
+                self._ready_streak = 0
                 return "awaiting_login"
-            if page.locator("text=New Crosstab").count() > 0:
-                return "ready"
+
+            if self.mode == "survey":
+                # Definitive: the crosstab list is exactly what the download needs.
+                if page.locator("text=New Crosstab").count() > 0:
+                    return "ready"
+                return "in_progress"
+
+            # Portal mode has no equivalent marker, so "no password field" is all we get.
+            # That is also briefly true mid-navigation, which would save an unauthenticated
+            # session, so require it to hold for a few consecutive polls.
+            if DEFAULT_ORIGIN in page.url:
+                self._ready_streak += 1
+                if self._ready_streak >= 3:
+                    return "ready"
         except Exception:                            # noqa: BLE001 - mid-navigation
             pass
         return "in_progress"
@@ -271,6 +304,7 @@ class _Session:
         self.saved = True
 
     def _stop_processes(self):
+        self._kill_stray_browsers()
         for proc in reversed(self._procs):
             try:
                 proc.terminate()
@@ -281,13 +315,85 @@ class _Session:
                 except Exception:                    # noqa: BLE001
                     pass
         self._procs.clear()
+        # After our own Popen children are waited on, anything left is an orphan.
+        self._reap_zombies()
+
+    @staticmethod
+    def _reap_zombies():
+        """Reap orphaned browser helpers.
+
+        Chromium shuts down correctly, but some of its helper processes outlive their parent
+        briefly and get reparented to PID 1 -- which is this app inside the container. Python
+        never calls wait() on them, so they sit as state=Z entries: no memory, but a set of
+        PID-table slots per login that never goes away. `init: true` in the compose files
+        handles this too; doing it here means it holds however the container is started.
+        """
+        while True:
+            try:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+            except OSError:                          # no children, or unsupported (Windows)
+                return
+            if pid == 0:                             # children exist but none have exited
+                return
+
+    @staticmethod
+    def _kill_stray_browsers():
+        """Backstop for Chromium surviving browser.close().
+
+        Observed in practice: after a cancelled login the session reports closed and Xvfb and
+        x11vnc are gone, but the Chromium process tree is still alive -- so every cancelled or
+        timed-out login would strand a browser, and they accumulate for the life of the
+        container. Matching on our own --window-size argument keeps this to browsers this
+        module launched. Reads /proc directly because the slim image has no ps/pkill.
+        """
+        proc_root = Path("/proc")
+        if not proc_root.is_dir():                   # not Linux (local dev on Windows)
+            return
+
+        marker = f"--window-size={SCREEN_W},{SCREEN_H}"
+
+        cmdlines, parents = {}, {}
+        for entry in proc_root.glob("[0-9]*"):
+            try:
+                pid = int(entry.name)
+                cmdlines[pid] = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(
+                    "utf-8", "ignore"
+                )
+                stat = (entry / "stat").read_text()
+                # "pid (comm) state ppid ..." -- comm can contain spaces and parens, so parse
+                # after the final ')': fields are then state, ppid, ...
+                parents[pid] = int(stat[stat.rindex(")") + 2:].split()[1])
+            except (OSError, ValueError):            # process vanished mid-read
+                continue
+
+        children = {}
+        for pid, ppid in parents.items():
+            children.setdefault(ppid, []).append(pid)
+
+        def subtree(pid, acc):
+            for child in children.get(pid, []):
+                subtree(child, acc)
+            acc.append(pid)                          # children before their parent
+            return acc
+
+        # Only the main browser process carries --window-size; its renderers and crashpad
+        # handler do not, and SIGKILLing the parent alone just orphans them. So take the whole
+        # subtree. Our own process is an ancestor of the browser, never inside this subtree.
+        for root in [pid for pid, cmd in cmdlines.items() if marker in cmd]:
+            for pid in subtree(root, []):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (OSError, ValueError):
+                    pass
 
 
 _current = None
 _current_lock = threading.Lock()
 
 
-def start(survey_url: str, after_login=None, on_failure=None) -> dict:
+def start(survey_url: str = None, after_login=None, on_failure=None) -> dict:
+    """Open a login window. With a survey URL it lands on that survey's crosstabs page and
+    the caller's after_login runs the download; without one it just connects."""
     global _current
     with _current_lock:
         if _current is not None and _current.active:
@@ -295,7 +401,8 @@ def start(survey_url: str, after_login=None, on_failure=None) -> dict:
         reason = preflight()
         if reason:
             raise LoginUnavailable(reason)
-        dl.parse_survey_url(survey_url)   # fail fast on a bad URL, before spawning anything
+        if survey_url:
+            dl.parse_survey_url(survey_url)   # fail fast, before spawning anything
         _current = _Session(survey_url, after_login=after_login, on_failure=on_failure)
         _current.start()
         # The one place the VNC password is disclosed: to the client that opened the login.
