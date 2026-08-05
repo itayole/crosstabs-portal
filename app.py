@@ -12,18 +12,26 @@ it relies on a pre-existing auth_state.json session file (see README.md).
 import json
 import os
 import shutil
+import socket
 import tempfile
 import threading
 import time
 import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, send_file, abort
+from flask import Flask, jsonify, render_template, request, send_file, send_from_directory, abort
+from flask_sock import Sock
 
 import download_crosstabs as dl
 import combine_crosstabs as combine
+import login_session as login
 
 app = Flask(__name__)
+sock = Sock(app)
+
+# Debian's novnc package. Served through this app rather than a second exposed port so the
+# whole feature stays on one origin and needs one proxy rule.
+NOVNC_DIR = Path(os.environ.get("NOVNC_DIR", "/usr/share/novnc"))
 
 
 class PrefixMiddleware:
@@ -173,6 +181,94 @@ def api_session_upload():
     os.replace(temp_path, dl.AUTH_FILE)
 
     return jsonify({"present": True})
+
+
+@app.route("/api/login/start", methods=["POST"])
+def api_login_start():
+    data = request.get_json(silent=True) or {}
+    survey_url = (data.get("survey_url") or "").strip()
+    try:
+        return jsonify(login.start(survey_url))
+    except login.LoginBusy as exc:
+        return jsonify({"error": str(exc)}), 409
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:                         # noqa: BLE001 - Xvfb/x11vnc failures
+        return jsonify({"error": f"לא ניתן לפתוח חלון התחברות: {exc}"}), 500
+
+
+@app.route("/api/login/status")
+def api_login_status():
+    return jsonify(login.status())
+
+
+@app.route("/api/login/finish", methods=["POST"])
+def api_login_finish():
+    return jsonify(login.finish())
+
+
+@app.route("/api/login/cancel", methods=["POST"])
+def api_login_cancel():
+    return jsonify(login.cancel())
+
+
+@app.route("/vnc/", defaults={"filename": "vnc.html"})
+@app.route("/vnc/<path:filename>")
+def novnc_static(filename):
+    if not NOVNC_DIR.is_dir():
+        abort(404)
+    return send_from_directory(NOVNC_DIR, filename)
+
+
+@sock.route("/vnc-ws")
+def vnc_ws(ws):
+    """Relay the browser's WebSocket to x11vnc's RFB port.
+
+    RFB over WebSocket is a plain byte stream in both directions, so this just copies bytes.
+    Refusing to connect unless a login is actually in progress is deliberate: outside that
+    window there is nothing listening on VNC_PORT and nothing to reach.
+    """
+    if not login.is_active():
+        return
+
+    try:
+        upstream = socket.create_connection(("127.0.0.1", login.VNC_PORT), timeout=5)
+    except OSError:
+        return
+
+    stop = threading.Event()
+
+    def upstream_to_client():
+        try:
+            while not stop.is_set():
+                chunk = upstream.recv(65536)
+                if not chunk:
+                    break
+                ws.send(chunk)
+        except Exception:                            # noqa: BLE001 - client vanished
+            pass
+        finally:
+            stop.set()
+
+    pump = threading.Thread(target=upstream_to_client, daemon=True)
+    pump.start()
+
+    try:
+        while not stop.is_set():
+            # timeout so a silent client can't pin this thread past the login window
+            data = ws.receive(timeout=1)
+            if data is None:
+                continue
+            upstream.sendall(data.encode() if isinstance(data, str) else data)
+    except Exception:                                # noqa: BLE001 - normal on disconnect
+        pass
+    finally:
+        stop.set()
+        try:
+            upstream.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        upstream.close()
 
 
 @app.route("/api/run", methods=["POST"])

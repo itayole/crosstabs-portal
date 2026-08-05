@@ -13,15 +13,46 @@ Decipher requires 2FA, so there's no way for a headless container to log in on i
 this container reuses the same `auth_state.json` session file the desktop script
 (`download_crosstabs.py` in the parent folder) already produces after a one-time manual login.
 
-**Setup / refresh flow:**
-1. On any machine with a browser (e.g. your desktop), run the desktop script's login step:
-   `python download_crosstabs.py "<any survey url>" --headed` and log in when the window opens.
-2. Upload the resulting `auth_state.json` on the app's own page — the panel at the top shows
-   whether a session is loaded and takes the file directly. No NAS or File Station access needed.
-3. The page then works until that Decipher session expires. When it does, the run fails, the
-   stale file is discarded automatically, and the upload panel reappears — repeat steps 1–2.
+**Primary flow — log in on the page:**
+1. Paste the survey URL, then click **פתיחת חלון התחברות**.
+2. A live view of a Chromium running *inside the container* appears. Log in to Decipher there,
+   including 2FA. It opens directly on that survey's crosstabs page.
+3. As soon as the crosstab list is reachable, the session is captured automatically
+   (`context.storage_state()` → `auth_state.json`), the window closes, and Run enables.
 
-There's no way around this manual step given 2FA.
+Why it can't be a normal popup: a popup from your own browser authenticates *your* browser, and
+those cookies live on Decipher's origin where neither this page's JavaScript nor the server can
+read them — the container's Playwright browser would stay logged out. Streaming the container's
+browser instead puts the session exactly where the download pipeline needs it. See
+`login_session.py`.
+
+**Fallback — upload the file:** run the desktop login step
+(`python download_crosstabs.py "<any survey url>" --headed`) and upload the resulting
+`auth_state.json` on the page. Still supported; useful if the streamed login misbehaves.
+
+Either way, an expired session is discarded automatically on the next failed run and the panel
+reappears.
+
+### How the streamed login works
+
+`Xvfb` provides a virtual display, headed Chromium runs on it, `x11vnc` exposes that display on
+localhost only, and the app relays RFB bytes over a WebSocket at `/vnc-ws` to a noVNC client
+served from `/vnc/`. Everything stays on port 5000, so the portal needs one proxy rule rather
+than a second exposed port — but that rule **must** pass WebSocket upgrade headers
+(`deploy/gateway.nginx.conf` in the portal repo does this via a `$connection_upgrade` map).
+
+Guards: one login at a time (409 otherwise), a per-session random VNC password returned only to
+the client that started it (never from `/api/login/status`), `x11vnc -localhost` so nothing off-box
+can reach it directly, nothing listening at all outside a login window, and a hard
+`LOGIN_TIMEOUT_SECONDS` (default 420) after which the browser and display are torn down.
+
+**Worth knowing:** during that window, real Decipher credentials are typed into a browser running
+on the NAS, reachable through a portal that has no authentication in front of it. The password and
+the short window limit exposure but don't remove it.
+
+Requires `xvfb`, `x11vnc` and `novnc` in the image, so **the streamed login only works in the
+Docker container** — the `crosstabs-dev` venv config in `.claude/launch.json` serves the page and
+the upload path, but starting a login there fails (no Xvfb).
 
 **The session does not survive a restart.** It's held in the container's temp dir, so any restart
 — including redeploying an unrelated portal app, since Container Station restarts the whole

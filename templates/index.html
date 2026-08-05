@@ -39,15 +39,46 @@
 
       <div id="session-upload" class="session-upload hidden">
         <p class="session-help">
-          הריצו את שלב ההתחברות בסקריפט הדסקטופ, והעלו כאן את הקובץ <code dir="ltr">auth_state.json</code> שנוצר.
-          הקובץ נשמר באופן זמני בלבד ויש להעלותו מחדש לאחר הפעלה מחדש של השירות.
+          התחברו ל-Decipher בחלון שייפתח כאן. החלון מריץ דפדפן בתוך השירות, כך שההתחברות
+          (כולל אימות דו-שלבי) נשמרת במקום הנכון. יש להזין תחילה את כתובת הסקר למטה —
+          החלון ייפתח ישירות בדף הקרוסטאבים שלו.
         </p>
         <div class="session-actions">
-          <input type="file" id="session-file" accept=".json,application/json">
-          <button type="button" id="session-submit">העלאה</button>
+          <button type="button" id="login-start">פתיחת חלון התחברות</button>
+          <button type="button" id="session-upload-toggle" class="link-button">או העלאת קובץ auth_state.json</button>
         </div>
+
+        <div id="upload-fallback" class="upload-fallback hidden">
+          <p class="session-help">
+            לחלופין, הריצו את שלב ההתחברות בסקריפט הדסקטופ והעלו כאן את הקובץ
+            <code dir="ltr">auth_state.json</code> שנוצר.
+          </p>
+          <div class="session-actions">
+            <input type="file" id="session-file" accept=".json,application/json">
+            <button type="button" id="session-submit">העלאה</button>
+          </div>
+        </div>
+
         <span id="session-error" class="session-error hidden"></span>
       </div>
+    </section>
+
+    <!-- Live view of the container's browser. The user completes Decipher's login and 2FA
+         here; the session is captured server-side the moment the crosstab list is reachable. -->
+    <section class="card login-card hidden" id="login-card">
+      <div class="login-head">
+        <span id="login-state" class="session-text">מכין חלון התחברות...</span>
+        <span id="login-countdown" class="login-countdown"></span>
+        <button type="button" id="login-done" class="link-button">סיימתי להתחבר</button>
+        <button type="button" id="login-cancel" class="link-button">ביטול</button>
+      </div>
+      <div class="login-frame-wrap">
+        <iframe id="login-frame" class="login-frame" title="התחברות ל-Decipher"></iframe>
+      </div>
+      <p class="session-help">
+        הקלדת שם משתמש, סיסמה וקוד האימות מתבצעת בדפדפן שרץ בתוך השירות. אין להשתמש בחלון זה
+        למטרות אחרות, והוא נסגר אוטומטית בתום הזמן.
+      </p>
     </section>
 
     <section class="card">
@@ -128,6 +159,139 @@
 
     sessionToggle.addEventListener('click', () => {
       sessionUpload.classList.toggle('hidden');
+    });
+
+    document.getElementById('session-upload-toggle').addEventListener('click', () => {
+      document.getElementById('upload-fallback').classList.toggle('hidden');
+    });
+
+    /* ---- interactive Decipher login (streamed container browser) ---- */
+    const loginCard = document.getElementById('login-card');
+    const loginState = document.getElementById('login-state');
+    const loginCountdown = document.getElementById('login-countdown');
+    const loginFrame = document.getElementById('login-frame');
+    const loginStart = document.getElementById('login-start');
+    const loginDone = document.getElementById('login-done');
+    const loginCancel = document.getElementById('login-cancel');
+
+    let loginPollTimer = null;
+
+    const LOGIN_LABELS = {
+      starting: 'מכין חלון התחברות...',
+      awaiting_login: 'התחברו ל-Decipher בחלון שלמטה',
+      in_progress: 'ממתין להשלמת ההתחברות (כולל אימות דו-שלבי)...',
+      ready: 'ההתחברות זוהתה — שומר...',
+      closed: 'חלון ההתחברות נסגר',
+    };
+
+    // The page may be served at / or under /crosstabs/, and noVNC wants the WebSocket path
+    // relative to the host root with no leading slash. Derive it from where we actually are
+    // rather than hardcoding either layout.
+    function vncUrl(password) {
+      const base = location.pathname.replace(/[^/]*$/, '');
+      const wsPath = (base + 'vnc-ws').replace(/^\//, '');
+      const params = new URLSearchParams({
+        path: wsPath,
+        password: password,
+        autoconnect: '1',
+        reconnect: '0',
+        resize: 'scale',
+        view_only: '0',
+      });
+      return 'vnc/vnc.html?' + params.toString();
+    }
+
+    function stopLoginPolling() {
+      if (loginPollTimer) clearTimeout(loginPollTimer);
+      loginPollTimer = null;
+    }
+
+    function closeLoginCard() {
+      stopLoginPolling();
+      loginFrame.src = 'about:blank';
+      loginCard.classList.add('hidden');
+    }
+
+    async function pollLogin() {
+      try {
+        const res = await fetch('api/login/status');
+        const data = await res.json();
+
+        loginState.textContent = LOGIN_LABELS[data.state] || data.state || '';
+        loginCountdown.textContent = data.seconds_left
+          ? `${Math.floor(data.seconds_left / 60)}:${String(data.seconds_left % 60).padStart(2, '0')}`
+          : '';
+
+        if (data.saved) {
+          closeLoginCard();
+          await loadSession();
+          statusLine.textContent = '';
+          return;
+        }
+
+        if (!data.active) {
+          closeLoginCard();
+          if (data.error) {
+            sessionError.textContent = data.error;
+            sessionError.classList.remove('hidden');
+          }
+          await loadSession();
+          return;
+        }
+
+        loginPollTimer = setTimeout(pollLogin, 1500);
+      } catch (err) {
+        loginPollTimer = setTimeout(pollLogin, 3000);
+      }
+    }
+
+    loginStart.addEventListener('click', async () => {
+      const surveyUrl = document.getElementById('survey_url').value.trim();
+      sessionError.classList.add('hidden');
+
+      if (!surveyUrl) {
+        sessionError.textContent = 'הזינו קודם את כתובת ה-URL של הסקר.';
+        sessionError.classList.remove('hidden');
+        return;
+      }
+
+      loginStart.disabled = true;
+      try {
+        const res = await fetch('api/login/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ survey_url: surveyUrl }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          sessionError.textContent = data.error || 'לא ניתן לפתוח חלון התחברות.';
+          sessionError.classList.remove('hidden');
+          return;
+        }
+
+        loginCard.classList.remove('hidden');
+        loginState.textContent = LOGIN_LABELS.starting;
+        // Small delay: x11vnc needs to be listening before noVNC attempts to connect.
+        setTimeout(() => { loginFrame.src = vncUrl(data.password); }, 1200);
+        pollLogin();
+      } catch (err) {
+        sessionError.textContent = `שגיאה: ${err.message}`;
+        sessionError.classList.remove('hidden');
+      } finally {
+        loginStart.disabled = false;
+      }
+    });
+
+    loginDone.addEventListener('click', async () => {
+      loginState.textContent = 'שומר את ההתחברות...';
+      await fetch('api/login/finish', { method: 'POST' });
+    });
+
+    loginCancel.addEventListener('click', async () => {
+      await fetch('api/login/cancel', { method: 'POST' });
+      closeLoginCard();
+      loadSession();
     });
 
     sessionSubmit.addEventListener('click', async () => {

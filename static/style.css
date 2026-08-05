@@ -376,3 +376,52 @@ button[type="submit"]:disabled { opacity: 0.55; cursor: default; }
   font-size: 0.8rem;
 }
 .session-error.hidden { display: none; }
+
+/* interactive login (streamed container browser) */
+.login-card {
+  margin-bottom: 16px;
+  padding: 18px 20px;
+}
+.login-card.hidden { display: none; }
+
+.login-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.login-head .link-button { margin: 0; }
+.login-head .session-text { flex: 1; min-width: 180px; }
+
+.login-countdown {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.8rem;
+  color: var(--subtitle);
+  direction: ltr;
+}
+
+/* Fixed aspect box matching the virtual display (1280x860) so noVNC's scaling has a
+   stable target instead of collapsing to zero height inside a flex/auto layout. */
+.login-frame-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1280 / 860;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--log-bg);
+}
+
+.login-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.upload-fallback { margin-top: 12px; }
+.upload-fallback.hidden { display: none; }

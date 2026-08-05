@@ -6,6 +6,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && playwright install --with-deps chromium
 
+# Interactive Decipher login (see login_session.py): the user drives a headed Chromium
+# running here, streamed to their browser. Xvfb gives it a display, x11vnc exposes that
+# display on localhost, and novnc supplies the client the page embeds. The WebSocket relay
+# lives in the app itself, so websockify isn't needed.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends xvfb x11vnc novnc \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 
 # Both paths are container-local scratch -- no volume. The session file is uploaded through

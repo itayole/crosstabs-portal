@@ -1,0 +1,31 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "// crosstabs-docker": "Full app, including Playwright's Chromium, so a real crosstab run works end to end. Use this one when testing the actual pipeline. Code is baked into the image -- rebuild (docker build -t ghcr.io/itayole/crosstabs-portal:latest .) to pick up edits.",
+      "name": "crosstabs-docker",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": [
+        "run", "--rm",
+        "--name", "crosstabs-preview",
+        "-p", "5000:5000",
+        "ghcr.io/itayole/crosstabs-portal:latest"
+      ],
+      "port": 5000
+    },
+    {
+      "// crosstabs-dev": "Flask dev server with auto-reload, for UI/template/CSS work -- edits apply immediately, no rebuild. Serves the page and accepts the auth_state.json upload, but cannot complete a run: the venv has the playwright package without its Chromium binary. Install it with .venv/Scripts/python -m playwright install chromium if you need real runs here.",
+      "name": "crosstabs-dev",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-m", "flask",
+        "--app", "app",
+        "run",
+        "--debug",
+        "--host", "127.0.0.1",
+        "--port", "5001"
+      ],
+      "port": 5001
+    }
+  ]
+}
