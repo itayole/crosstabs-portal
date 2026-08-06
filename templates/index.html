@@ -43,8 +43,10 @@
         <p class="session-help">
           חיבור ל-Decipher נדרש לכל פעולה בכלי. לחיצה על "התחברות" תפתח כאן דפדפן שרץ
           בתוך השירות, כך שההתחברות (כולל אימות דו-שלבי) נשמרת במקום הנכון.
-          אם הוזנה כבר כתובת סקר, החלון ייפתח ישירות בדף הקרוסטאבים שלה וההורדה
-          תתחיל אוטומטית מיד לאחר ההתחברות.
+          <strong>מומלץ להזין תחילה את כתובת הסקר למטה</strong> — אז החלון נפתח ישירות בדף
+          הקרוסטאבים: אם החיבור עדיין פעיל יוצגו התוצאות מיד, ואחרת יוצג מסך ההתחברות.
+          בשני המקרים ההורדה מתחילה אוטומטית ברגע שהדף נטען. ללא כתובת סקר ייפתח מסך
+          ההתחברות בלבד, ויש לאשר בסיום בלחיצה על "התחברתי — המשך".
         </p>
         <div class="session-actions">
           <button type="button" id="connect-button">התחברות ל-Decipher</button>
@@ -72,16 +74,18 @@
       <div class="login-head">
         <span id="login-state" class="session-text">מכין חלון התחברות...</span>
         <span id="login-countdown" class="login-countdown"></span>
-        <button type="button" id="login-done" class="link-button">סיימתי להתחבר</button>
+        <button type="button" id="login-done">התחברתי — המשך</button>
         <button type="button" id="login-cancel" class="link-button">ביטול</button>
       </div>
       <div class="login-frame-wrap">
         <iframe id="login-frame" class="login-frame" title="התחברות ל-Decipher"></iframe>
       </div>
       <p class="session-help">
-        הקלדת שם משתמש, סיסמה וקוד האימות מתבצעת בדפדפן שרץ בתוך השירות. אין להשתמש בחלון זה
-        למטרות אחרות, והוא נסגר אוטומטית בתום הזמן.
+        הקלדת שם משתמש, סיסמה וקוד האימות מתבצעת בדפדפן שרץ בתוך השירות. בסיום ההתחברות —
+        או אם אתם כבר מחוברים — לחצו "התחברתי — המשך". אין להשתמש בחלון זה למטרות אחרות,
+        והוא נסגר אוטומטית בתום הזמן.
       </p>
+      <span id="login-error" class="session-error hidden"></span>
     </section>
 
     <section class="card">
@@ -189,6 +193,7 @@
     const loginCountdown = document.getElementById('login-countdown');
     const loginFrame = document.getElementById('login-frame');
     const loginDone = document.getElementById('login-done');
+    const loginError = document.getElementById('login-error');
     const loginCancel = document.getElementById('login-cancel');
 
     let loginPollTimer = null;
@@ -244,6 +249,13 @@
         const data = await res.json();
 
         loginState.textContent = LOGIN_LABELS[data.state] || data.state || '';
+
+        // A rejected confirmation ("still on the login screen") is reported in-place: the
+        // window stays open and the user simply finishes logging in and presses again.
+        if (data.active && data.error) {
+          loginError.textContent = data.error;
+          loginError.classList.remove('hidden');
+        }
 
         // Attach the viewer only once x11vnc is up, and only once.
         if (data.vnc_ready && vncPassword && !loginFrame.getAttribute('src')) {
@@ -329,6 +341,7 @@
     });
 
     loginDone.addEventListener('click', async () => {
+      loginError.classList.add('hidden');
       loginState.textContent = 'שומר את ההתחברות...';
       await fetch('api/login/finish', { method: 'POST' });
     });

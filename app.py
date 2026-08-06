@@ -300,6 +300,13 @@ def novnc_static(filename):
     return send_from_directory(NOVNC_DIR, filename)
 
 
+def _close_quietly(ws):
+    try:
+        ws.close()
+    except Exception:                                # noqa: BLE001 - already gone
+        pass
+
+
 @sock.route("/vnc-ws")
 def vnc_ws(ws):
     """Relay the browser's WebSocket to x11vnc's RFB port.
@@ -308,12 +315,17 @@ def vnc_ws(ws):
     Refusing to connect unless a login is actually in progress is deliberate: outside that
     window there is nothing listening on VNC_PORT and nothing to reach.
     """
+    # noVNC retries on its own, so this endpoint is hit repeatedly after a login ends.
+    # Returning here would drop an already-upgraded socket, which the client reports as
+    # "1006 / Invalid frame header" -- noise that looks like a protocol fault. Close cleanly.
     if not login.is_active():
+        _close_quietly(ws)
         return
 
     try:
         upstream = socket.create_connection(("127.0.0.1", login.VNC_PORT), timeout=5)
     except OSError:
+        _close_quietly(ws)
         return
 
     stop = threading.Event()

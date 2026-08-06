@@ -33,6 +33,10 @@ import download_crosstabs as dl
 # default -- set DECIPHER_ORIGIN if the account lives on a different regional host.
 DEFAULT_ORIGIN = os.environ.get("DECIPHER_ORIGIN", "https://emea.focusvision.com").rstrip("/")
 
+# Where a connect-only login window lands. Override with DECIPHER_LOGIN_URL if the sign-in
+# page ever moves.
+LOGIN_URL = os.environ.get("DECIPHER_LOGIN_URL", f"{DEFAULT_ORIGIN}/login")
+
 DISPLAY = os.environ.get("LOGIN_DISPLAY", ":99")
 VNC_PORT = int(os.environ.get("LOGIN_VNC_PORT", "5900"))
 SCREEN_W, SCREEN_H = 1280, 860
@@ -115,6 +119,7 @@ class _Session:
         # The page must not point noVNC at the relay until x11vnc is actually listening:
         # connecting earlier fails outright, and noVNC does not retry by itself.
         self.vnc_ready = False
+        self.target = None          # the URL the window opens on; surfaced for support
         self.created_at = time.time()
 
         # after_login(page, list_url) runs the download in this session's own browser, in
@@ -151,6 +156,7 @@ class _Session:
             "saved": self.saved,
             "error": self.error,
             "vnc_ready": self.vnc_ready,
+            "target": self.target,
             "width": SCREEN_W,
             "height": SCREEN_H,
             "seconds_left": max(0, int(self.created_at + SESSION_TIMEOUT_SECONDS - time.time())),
@@ -203,7 +209,8 @@ class _Session:
             self.list_url = dl.survey_list_url(self.survey_url)
             target = self.list_url
         else:
-            target = f"{DEFAULT_ORIGIN}/apps/portal/"
+            target = LOGIN_URL
+        self.target = target
 
         env = {**os.environ, "DISPLAY": DISPLAY}
         with sync_playwright() as playwright:
@@ -248,7 +255,14 @@ class _Session:
             # Auto-save the moment the survey's crosstab list is reachable -- that is the
             # same check the download pipeline uses, so if it passes here the run will work.
             # "finish" lets the user force it if the heuristic misses.
+            if command == "finish" and self.state == "awaiting_login":
+                # Confirming while the login form is still on screen would save nothing
+                # useful, so say so and keep the window open rather than failing later.
+                self.error = "עדיין מוצג מסך ההתחברות. השלימו את ההתחברות ואז לחצו שוב."
+                continue
+
             if self.state == "ready" or command == "finish":
+                self.error = None
                 self._save(context)
                 self._hand_off(page)
                 return
@@ -287,13 +301,10 @@ class _Session:
                     return "ready"
                 return "in_progress"
 
-            # Portal mode has no equivalent marker, so "no password field" is all we get.
-            # That is also briefly true mid-navigation, which would save an unauthenticated
-            # session, so require it to hold for a few consecutive polls.
-            if DEFAULT_ORIGIN in page.url:
-                self._ready_streak += 1
-                if self._ready_streak >= 3:
-                    return "ready"
+            # Connect mode has no such marker and must NOT guess. An earlier version treated
+            # "no password field on our origin" as success, which fired on the site root
+            # before anyone had signed in and saved an unauthenticated session -- every later
+            # run then failed for no visible reason. The user confirms instead, via "finish".
         except Exception:                            # noqa: BLE001 - mid-navigation
             pass
         return "in_progress"

@@ -457,3 +457,14 @@ button[type="submit"]:disabled { opacity: 0.55; cursor: default; }
   cursor: pointer;
 }
 .session-actions #connect-button:disabled { opacity: 0.55; cursor: default; }
+
+.login-head #login-done {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
