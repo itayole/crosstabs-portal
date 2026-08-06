@@ -1,4 +1,16 @@
+# Job output and the Decipher session -- created at runtime, never baked in.
 downloads/
+data/
 auth_state.json
+
 __pycache__/
 *.pyc
+
+# Local development only, and actively harmful in the image: .venv is a *Windows*
+# virtualenv (~132MB) that was being copied into a Linux image, where it is both dead
+# weight and misleading. The container installs its own dependencies via requirements.txt.
+.venv/
+.claude/
+.git/
+.gitignore
+.dockerignore

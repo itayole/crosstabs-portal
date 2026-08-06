@@ -4,6 +4,7 @@
     {
       "// crosstabs-dev": "DEFAULT (listed first) because it has no external dependencies -- just the local .venv. Flask dev server with auto-reload, so template/CSS/Python edits apply immediately. Chromium is installed in the venv (python -m playwright install chromium), so real crosstab runs work here given a valid session. The one thing it cannot do is the streamed Decipher login, which needs xvfb/x11vnc/novnc -- those exist only in the Docker image, and attempting it returns a clear 503 rather than failing obscurely.",
       "name": "crosstabs-dev",
+      "autoPort": false,
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": [
         "-m", "flask",
@@ -16,8 +17,9 @@
       "port": 5001
     },
     {
-      "// crosstabs-docker": "Full app: Playwright Chromium for real runs, and xvfb/x11vnc/novnc for the streamed Decipher login. REQUIRES the Docker daemon to be running -- preview_start fails outright if Docker Desktop is not up. Code is baked into the image, so rebuild to pick up edits: docker build -t ghcr.io/itayole/crosstabs-portal:latest .",
+      "// crosstabs-docker": "Full app: Playwright Chromium for real runs, and xvfb/x11vnc/novnc for the streamed Decipher login. REQUIRES the Docker daemon to be running -- preview_start fails outright if Docker Desktop is not up. Code is baked into the image, so rebuild to pick up edits: docker build -t ghcr.io/itayole/crosstabs-portal:latest . If port 5000 is reported busy, it is usually a leftover container from a previous run: docker rm -f crosstabs-preview.",
       "name": "crosstabs-docker",
+      "autoPort": false,
       "runtimeExecutable": "docker",
       "runtimeArgs": [
         "run", "--rm",
