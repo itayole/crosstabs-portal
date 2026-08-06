@@ -261,7 +261,10 @@ class _Session:
                 self.error = "עדיין מוצג מסך ההתחברות. השלימו את ההתחברות ואז לחצו שוב."
                 continue
 
-            if self.state == "ready" or command == "finish":
+            # Only an explicit confirmation proceeds. Detection still labels the state for the
+            # page, but never triggers on its own: the user is the authority on whether the
+            # login worked, which is the one signal that can't be misread.
+            if command == "finish":
                 self.error = None
                 self._save(context)
                 self._hand_off(page)

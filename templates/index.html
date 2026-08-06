@@ -20,9 +20,9 @@
     </header>
 
     <ol class="steps">
-      <li class="step" data-step="0"><span class="dot">1</span><span class="label">התחברות</span></li>
+      <li class="step" data-step="0"><span class="dot">1</span><span class="label">כתובת סקר</span></li>
       <li class="connector"></li>
-      <li class="step" data-step="1"><span class="dot">2</span><span class="label">כתובת סקר</span></li>
+      <li class="step" data-step="1"><span class="dot">2</span><span class="label">התחברות ואישור</span></li>
       <li class="connector"></li>
       <li class="step" data-step="2"><span class="dot">3</span><span class="label">עיבוד</span></li>
       <li class="connector"></li>
@@ -41,15 +41,12 @@
 
       <div id="session-upload" class="session-upload hidden">
         <p class="session-help">
-          חיבור ל-Decipher נדרש לכל פעולה בכלי. לחיצה על "התחברות" תפתח כאן דפדפן שרץ
-          בתוך השירות, כך שההתחברות (כולל אימות דו-שלבי) נשמרת במקום הנכון.
-          <strong>מומלץ להזין תחילה את כתובת הסקר למטה</strong> — אז החלון נפתח ישירות בדף
-          הקרוסטאבים: אם החיבור עדיין פעיל יוצגו התוצאות מיד, ואחרת יוצג מסך ההתחברות.
-          בשני המקרים ההורדה מתחילה אוטומטית ברגע שהדף נטען. ללא כתובת סקר ייפתח מסך
-          ההתחברות בלבד, ויש לאשר בסיום בלחיצה על "התחברתי — המשך".
+          חיבור ל-Decipher נדרש לכל הרצה. הזינו את כתובת הסקר למטה ולחצו "הרץ" — ייפתח כאן
+          דפדפן שרץ בתוך השירות, ישירות בדף הקרוסטאבים של הסקר: אם החיבור עדיין פעיל יוצגו
+          התוצאות, ואחרת יוצג מסך ההתחברות (כולל אימות דו-שלבי). בסיום לחצו
+          "התחברתי — המשך" וההורדה תתחיל באותו הדפדפן.
         </p>
         <div class="session-actions">
-          <button type="button" id="connect-button">התחברות ל-Decipher</button>
           <button type="button" id="session-upload-toggle" class="link-button">העלאת קובץ auth_state.json במקום</button>
         </div>
 
@@ -144,7 +141,6 @@
     const sessionSubmit = document.getElementById('session-submit');
     const sessionError = document.getElementById('session-error');
     const runHint = document.getElementById('run-hint');
-    const connectButton = document.getElementById('connect-button');
 
     let pollTimer = null;
     let shownLines = 0;
@@ -159,14 +155,12 @@
       sessionToggle.classList.toggle('hidden', !present);
       sessionUpload.classList.toggle('hidden', present);
 
-      // Connecting is a precondition, so Run is gated on it -- but the gate has to explain
-      // itself. An unexplained dead button reads as "my URL was rejected", which is why the
-      // hint names the missing step and step 1 stays highlighted until connected.
-      runButton.disabled = !present;
-      runHint.textContent = present
-        ? ''
-        : 'יש להתחבר ל-Decipher (שלב 1) לפני הרצה. אפשר להזין כאן את כתובת הסקר מראש — ההורדה תתחיל אוטומטית עם ההתחברות.';
-      setStep(present ? 1 : 0);
+      // Run is never gated: it opens the connection window itself, and the download follows
+      // the user's confirmation there. The session state below is informational only.
+      runButton.disabled = false;
+      runHint.textContent =
+        'לחיצה על "הרץ" תפתח חלון התחברות ל-Decipher בדף הקרוסטאבים של הסקר. אשרו שם את החיבור וההורדה תתחיל.';
+      setStep(0);
     }
 
     async function loadSession() {
@@ -206,7 +200,7 @@
       starting: 'מכין חלון התחברות...',
       awaiting_login: 'התחברו ל-Decipher בחלון שלמטה',
       in_progress: 'ממתין להשלמת ההתחברות (כולל אימות דו-שלבי)...',
-      ready: 'ההתחברות זוהתה — מתחיל בהורדה...',
+      ready: 'נראה שאתם מחוברים — לחצו "התחברתי — המשך" כדי להתחיל',
       downloading: 'מוריד את הקרוסטאבים באותו הדפדפן...',
       finished: 'הסתיים',
       closed: 'חלון ההתחברות נסגר',
@@ -289,12 +283,19 @@
       }
     }
 
-    // surveyUrl is optional: connecting has to be possible before a survey is chosen, since
-    // it's a precondition for everything else. If one is supplied the login opens on it and
-    // the download follows automatically.
+    // The survey URL is required now: the window always opens on that survey's crosstabs
+    // page, which is what makes it both the connection check and the run's starting point.
     async function startInteractiveLogin(surveyUrl) {
       sessionError.classList.add('hidden');
-      connectButton.disabled = true;
+
+      if (!surveyUrl) {
+        sessionError.textContent = 'הזינו קודם את כתובת ה-URL של הסקר.';
+        sessionError.classList.remove('hidden');
+        sessionUpload.classList.remove('hidden');
+        return false;
+      }
+
+      runButton.disabled = true;
       try {
         const res = await fetch('api/login/start', {
           method: 'POST',
@@ -320,6 +321,7 @@
         loginJobPolling = false;
         loginCard.classList.remove('hidden');
         loginState.textContent = LOGIN_LABELS.starting;
+        setStep(1);
         // The iframe is pointed at the relay by pollLogin once the server reports vnc_ready.
         // A fixed delay was wrong: bringing up Xvfb, x11vnc and Chromium takes several
         // seconds, so noVNC connected to a closed port and gave up.
@@ -331,14 +333,9 @@
         sessionError.classList.remove('hidden');
         return false;
       } finally {
-        connectButton.disabled = false;
+        runButton.disabled = false;
       }
     }
-
-    connectButton.addEventListener('click', () => {
-      // Pre-filled URL is used when present, so connecting can go straight into the run.
-      startInteractiveLogin(document.getElementById('survey_url').value.trim());
-    });
 
     loginDone.addEventListener('click', async () => {
       loginError.classList.add('hidden');
@@ -444,7 +441,7 @@
         } else {
           statusLine.textContent = `נכשל: ${data.error || 'שגיאה לא ידועה'}`;
           statusLine.className = 'status-line error';
-          setStep(1);
+          setStep(0);          // back to the start of the flow, not the login step
           // An expired session is discarded server-side, so re-read the state: this
           // reopens the upload box rather than letting the next run fail the same way.
           loadSession();
@@ -463,38 +460,13 @@
 
       const surveyUrl = document.getElementById('survey_url').value.trim();
 
-      if (!sessionPresent) {          // gated by renderSession; belt and braces
-        await startInteractiveLogin(surveyUrl);
-        return;
-      }
-
-      runButton.disabled = true;
-      resetView();
-
-      try {
-        const res = await fetch('api/run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ survey_url: surveyUrl }),
-        });
-        const data = await res.json();
-
-        if (!res.ok) {
-          runButton.disabled = false;
-          spinner.classList.add('hidden');
-          statusLine.textContent = `שגיאה: ${data.error || 'לא ניתן להתחיל את הריצה'}`;
-          statusLine.className = 'status-line error';
-          setStep(1);
-          return;
-        }
-
-        poll(data.job_id);
-      } catch (err) {
-        runButton.disabled = false;
-        spinner.classList.add('hidden');
-        statusLine.textContent = `שגיאה: ${err.message}`;
-        statusLine.className = 'status-line error';
-      }
+      // Run always goes through the connection window: it opens on this survey, so the user
+      // sees either the crosstabs (session alive) or the login screen, confirms there, and
+      // the download starts in that same browser. One button, one path, nothing inferred.
+      //
+      // The /api/run endpoint still exists for the stored-session case (an uploaded
+      // auth_state.json) but the page no longer drives it.
+      await startInteractiveLogin(surveyUrl);
     });
 
     loadSession();
