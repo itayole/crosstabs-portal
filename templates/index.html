@@ -62,6 +62,9 @@
         </div>
 
         <span id="session-error" class="session-error hidden"></span>
+        <!-- Shown only when a previous login still holds the lock, so a window left open by
+             a failed attempt can't wedge the app for its whole timeout. -->
+        <button type="button" id="force-restart" class="link-button hidden">בטלו את ההתחברות הקודמת ונסו שוב</button>
       </div>
     </section>
 
@@ -141,6 +144,7 @@
     const sessionSubmit = document.getElementById('session-submit');
     const sessionError = document.getElementById('session-error');
     const runHint = document.getElementById('run-hint');
+    const forceRestart = document.getElementById('force-restart');
 
     let pollTimer = null;
     let shownLines = 0;
@@ -288,6 +292,8 @@
     async function startInteractiveLogin(surveyUrl) {
       sessionError.classList.add('hidden');
 
+      forceRestart.classList.add('hidden');
+
       if (!surveyUrl) {
         sessionError.textContent = 'הזינו קודם את כתובת ה-URL של הסקר.';
         sessionError.classList.remove('hidden');
@@ -307,6 +313,11 @@
         if (!res.ok) {
           sessionError.textContent = data.error || 'לא ניתן לפתוח חלון התחברות.';
           sessionError.classList.remove('hidden');
+          // 409: an earlier window still holds the lock. Offer a way out instead of making
+          // the user wait out its timeout with no visible option.
+          if (res.status === 409) {
+            forceRestart.classList.remove('hidden');
+          }
           // Nothing to wait for in this environment -- open the upload fallback and hide the
           // button, so the user is left with the path that does work rather than a dead end.
           if (data.unavailable) {
@@ -341,6 +352,15 @@
       loginError.classList.add('hidden');
       loginState.textContent = 'שומר את ההתחברות...';
       await fetch('api/login/finish', { method: 'POST' });
+    });
+
+    forceRestart.addEventListener('click', async () => {
+      forceRestart.classList.add('hidden');
+      sessionError.textContent = 'מבטל את ההתחברות הקודמת...';
+      await fetch('api/login/cancel', { method: 'POST' });
+      // The worker needs a moment to tear down Xvfb/x11vnc before a new one can bind them.
+      await new Promise(r => setTimeout(r, 2500));
+      await startInteractiveLogin(document.getElementById('survey_url').value.trim());
     });
 
     loginCancel.addEventListener('click', async () => {
