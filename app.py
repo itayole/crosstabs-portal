@@ -292,12 +292,26 @@ def api_login_cancel():
     return jsonify(login.cancel())
 
 
-@app.route("/vnc/", defaults={"filename": "vnc.html"})
-@app.route("/vnc/<path:filename>")
-def novnc_static(filename):
+def _serve_novnc(filename):
     if not NOVNC_DIR.is_dir():
         abort(404)
     return send_from_directory(NOVNC_DIR, filename)
+
+
+# Two independent rules, deliberately NOT one rule with defaults={"filename": "vnc.html"}.
+# That form makes Werkzeug canonicalise /vnc/vnc.html to /vnc/ with a 308 whose Location is
+# root-absolute. Behind the portal gateway the prefix is stripped before Flask sees the
+# request, so Flask emits "/vnc/" with no idea /crosstabs exists -- the browser follows it to
+# the portal root, nginx hands back the homepage, and the login window fills with the portal
+# instead of Decipher. Serving the file directly means no redirect to get mangled.
+@app.route("/vnc/")
+def novnc_index():
+    return _serve_novnc("vnc.html")
+
+
+@app.route("/vnc/<path:filename>")
+def novnc_static(filename):
+    return _serve_novnc(filename)
 
 
 def _close_quietly(ws):
