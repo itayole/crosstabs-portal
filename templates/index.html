@@ -75,10 +75,13 @@
         <span id="login-state" class="session-text">מכין חלון התחברות...</span>
         <span id="login-countdown" class="login-countdown"></span>
         <button type="button" id="login-done">התחברתי — המשך</button>
+        <button type="button" id="login-popout" class="link-button">פתחו בחלון נפרד</button>
+        <button type="button" id="login-fullscreen" class="link-button">מסך מלא</button>
         <button type="button" id="login-cancel" class="link-button">ביטול</button>
       </div>
       <div class="login-frame-wrap">
-        <iframe id="login-frame" class="login-frame" title="התחברות ל-Decipher"></iframe>
+        <iframe id="login-frame" class="login-frame" title="התחברות ל-Decipher"
+                allow="fullscreen; clipboard-read; clipboard-write"></iframe>
       </div>
       <p class="session-help">
         הקלדת שם משתמש, סיסמה וקוד האימות מתבצעת בדפדפן שרץ בתוך השירות. בסיום ההתחברות —
@@ -192,6 +195,8 @@
     const loginFrame = document.getElementById('login-frame');
     const loginDone = document.getElementById('login-done');
     const loginError = document.getElementById('login-error');
+    const loginPopout = document.getElementById('login-popout');
+    const loginFullscreen = document.getElementById('login-fullscreen');
     const loginCancel = document.getElementById('login-cancel');
 
     let loginPollTimer = null;
@@ -199,6 +204,7 @@
     let loginJobId = null;
     let loginJobPolling = false;
     let vncPassword = null;
+    let popoutWindow = null;
 
     const LOGIN_LABELS = {
       starting: 'מכין חלון התחברות...',
@@ -239,6 +245,9 @@
       loginFrame.removeAttribute('src');   // so the next login re-attaches on vnc_ready
       vncPassword = null;
       loginCard.classList.add('hidden');
+      document.querySelector('.page').classList.remove('page--wide');
+      if (popoutWindow && !popoutWindow.closed) popoutWindow.close();
+      popoutWindow = null;
     }
 
     async function pollLogin() {
@@ -331,6 +340,8 @@
         loginJobId = data.job_id || null;
         loginJobPolling = false;
         loginCard.classList.remove('hidden');
+        // Widen the reading column so the stream isn't scaled down to an unreadable size.
+        document.querySelector('.page').classList.add('page--wide');
         loginState.textContent = LOGIN_LABELS.starting;
         setStep(1);
         // The iframe is pointed at the relay by pollLogin once the server reports vnc_ready.
@@ -352,6 +363,25 @@
       loginError.classList.add('hidden');
       loginState.textContent = 'שומר את ההתחברות...';
       await fetch('api/login/finish', { method: 'POST' });
+    });
+
+    // A real window shows the 1280x860 desktop at 1:1 with no scaling at all -- the most
+    // readable option, and it keeps using the same relay, so the session is unaffected.
+    loginPopout.addEventListener('click', () => {
+      if (!vncPassword) return;
+      const url = new URL(vncUrl(vncPassword), location.href).href;
+      popoutWindow = window.open(url, 'decipher-login',
+        'width=1320,height=940,menubar=no,toolbar=no,location=no');
+      if (!popoutWindow) {
+        loginError.textContent = 'הדפדפן חסם את החלון. אפשרו חלונות קופצים לאתר זה.';
+        loginError.classList.remove('hidden');
+      }
+    });
+
+    loginFullscreen.addEventListener('click', () => {
+      const wrap = document.querySelector('.login-frame-wrap');
+      if (document.fullscreenElement) document.exitFullscreen();
+      else if (wrap.requestFullscreen) wrap.requestFullscreen();
     });
 
     forceRestart.addEventListener('click', async () => {

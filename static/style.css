@@ -58,6 +58,14 @@ body {
 .page {
   width: 100%;
   max-width: 680px;
+  transition: max-width 0.2s ease;
+}
+
+/* While the login window is open the page widens to roughly the virtual display's own
+   width, so the stream renders about 1:1 instead of being scaled down to ~53% inside the
+   680px reading column -- at that size the Decipher login text is unreadable. */
+.page.page--wide {
+  max-width: min(96vw, 1360px);
 }
 
 .page-header {
