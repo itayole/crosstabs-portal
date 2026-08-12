@@ -142,9 +142,9 @@ class _Session:
     def active(self) -> bool:
         return not self._closed.is_set()
 
-    def request(self, command: str):
+    def request(self, command: str, payload=None):
         if self.active:
-            self._commands.put(command)
+            self._commands.put((command, payload))
 
     def snapshot(self) -> dict:
         """Deliberately excludes the VNC password. Status is pollable by anyone who can reach
@@ -248,12 +248,23 @@ class _Session:
         deadline = self.created_at + SESSION_TIMEOUT_SECONDS
         while time.time() < deadline:
             try:
-                command = self._commands.get(timeout=1.0)
+                command, payload = self._commands.get(timeout=1.0)
             except queue.Empty:
-                command = "poll"
+                command, payload = "poll", None
 
             if command == "cancel":
                 return
+
+            # Type text straight into the remote browser's focused field. The VNC clipboard
+            # bridge does not work on this Xvfb/x11vnc setup (verified: cut text crosses in
+            # neither direction), and a password out of a password manager is exactly what
+            # nobody should have to retype by hand.
+            if command == "type":
+                try:
+                    page.keyboard.type(payload or "", delay=15)
+                except Exception as exc:             # noqa: BLE001 - surfaced to the page
+                    self.error = f"ההקלדה נכשלה: {exc}"
+                continue
 
             self.state = self._detect(page)
 
@@ -433,6 +444,15 @@ def status() -> dict:
         if _current is None:
             return {"active": False, "state": "idle", "saved": False, "error": None}
         return _current.snapshot()
+
+
+def type_text(text: str) -> dict:
+    """Type text into the login browser's focused field."""
+    with _current_lock:
+        if _current is None or not _current.active:
+            raise LoginBusy("אין חלון התחברות פעיל.")
+        _current.request("type", text)
+        return status_unlocked()
 
 
 def finish() -> dict:

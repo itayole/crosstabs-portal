@@ -83,10 +83,22 @@
         <iframe id="login-frame" class="login-frame" title="התחברות ל-Decipher"
                 allow="fullscreen; clipboard-read; clipboard-write"></iframe>
       </div>
+      <!-- The window is a remote desktop, so the clipboard inside it is the *container's*,
+           not yours: Ctrl+V there pastes from an empty clipboard. Pasting into this field
+           (an ordinary paste, needing no clipboard permission) forwards the text to the
+           remote clipboard, after which Ctrl+V inside the window works. -->
+      <div class="paste-row">
+        <label for="paste-text">הדבקת סיסמה לחלון</label>
+        <input type="password" id="paste-text" autocomplete="off"
+               placeholder="הדביקו כאן (Ctrl+V) ולחצו שליחה">
+        <button type="button" id="paste-send">שליחה לחלון</button>
+      </div>
       <p class="session-help">
-        הקלדת שם משתמש, סיסמה וקוד האימות מתבצעת בדפדפן שרץ בתוך השירות. בסיום ההתחברות —
-        או אם אתם כבר מחוברים — לחצו "התחברתי — המשך". אין להשתמש בחלון זה למטרות אחרות,
-        והוא נסגר אוטומטית בתום הזמן.
+        הקלדת שם משתמש, סיסמה וקוד האימות מתבצעת בדפדפן שרץ בתוך השירות, ולכן Ctrl+V רגיל
+        בחלון לא יעבוד. להדבקת סיסמה ממנהל־סיסמאות: <strong>לחצו תחילה על שדה הסיסמה בחלון</strong>,
+        הדביקו את הסיסמה בשדה שלמעלה ולחצו "שליחה לחלון" — היא תוקלד לשדה שבפוקוס. השדה
+        שלמעלה מתרוקן מיד לאחר השליחה. בסיום ההתחברות — או אם אתם כבר מחוברים — לחצו
+        "התחברתי — המשך".
       </p>
       <span id="login-error" class="session-error hidden"></span>
     </section>
@@ -196,6 +208,8 @@
     const loginDone = document.getElementById('login-done');
     const loginError = document.getElementById('login-error');
     const loginPopout = document.getElementById('login-popout');
+    const pasteText = document.getElementById('paste-text');
+    const pasteSend = document.getElementById('paste-send');
     const loginFullscreen = document.getElementById('login-fullscreen');
     const loginCancel = document.getElementById('login-cancel');
 
@@ -375,6 +389,43 @@
       if (!popoutWindow) {
         loginError.textContent = 'הדפדפן חסם את החלון. אפשרו חלונות קופצים לאתר זה.';
         loginError.classList.remove('hidden');
+      }
+    });
+
+    // Type the text server-side into the login browser's focused field. The obvious route --
+    // pushing it to the remote clipboard so Ctrl+V works -- is a dead end here: RFB cut text
+    // crosses in neither direction on this Xvfb/x11vnc setup, verified by reading the
+    // container's X selection directly. Typing needs no clipboard support at all.
+    pasteSend.addEventListener('click', async () => {
+      const text = pasteText.value;
+      loginError.classList.add('hidden');
+
+      if (!text) {
+        loginError.textContent = 'הדביקו קודם טקסט בשדה.';
+        loginError.classList.remove('hidden');
+        return;
+      }
+
+      pasteSend.disabled = true;
+      try {
+        const res = await fetch('api/login/type', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          loginError.textContent = data.error || 'ההקלדה נכשלה.';
+          loginError.classList.remove('hidden');
+          return;
+        }
+        pasteText.value = '';      // don't leave the password sitting in the DOM
+        loginState.textContent = 'הטקסט הוקלד בחלון';
+      } catch (err) {
+        loginError.textContent = `ההקלדה נכשלה: ${err.message}`;
+        loginError.classList.remove('hidden');
+      } finally {
+        pasteSend.disabled = false;
       }
     });
 

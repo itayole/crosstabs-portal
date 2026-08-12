@@ -282,6 +282,22 @@ def api_login_status():
     return jsonify(login.status())
 
 
+@app.route("/api/login/type", methods=["POST"])
+def api_login_type():
+    """Type text into the login window (passwords pasted from a password manager).
+
+    Deliberately not logged anywhere: it goes straight to the browser's keyboard.
+    """
+    data = request.get_json(silent=True) or {}
+    text = data.get("text") or ""
+    if not text:
+        return jsonify({"error": "לא נשלח טקסט."}), 400
+    try:
+        return jsonify(login.type_text(text))
+    except login.LoginBusy as exc:
+        return jsonify({"error": str(exc)}), 409
+
+
 @app.route("/api/login/finish", methods=["POST"])
 def api_login_finish():
     return jsonify(login.finish())
