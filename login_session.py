@@ -198,6 +198,11 @@ class _Session:
                 "x11vnc", "-display", DISPLAY, "-rfbport", str(VNC_PORT),
                 "-localhost", "-passwd", self.password,
                 "-forever", "-shared", "-noxdamage", "-quiet",
+                # Note: server-side resize (noVNC resize=remote, x11vnc -xrandr resize) was
+                # tried and does not work on Xvfb here -- the framebuffer stays 1280x860 and
+                # the client scales anyway. Readability is handled client-side instead: a
+                # wider page while logging in, plus a pop-out window that shows it 1:1.
+                # Making resize=remote work would mean swapping Xvfb+x11vnc for Xvnc.
             ],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         ))
